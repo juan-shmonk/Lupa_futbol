@@ -1,0 +1,76 @@
+# ── Dependencias ──────────────────────────────
+node_modules/
+.pnp
+.pnp.js
+
+# ── Build / output ────────────────────────────
+dist/
+dist-ssr/
+build/
+out/
+
+# ── Variables de entorno (NUNCA subir al repo) ─
+.env
+.env.local
+.env.development
+.env.development.local
+.env.test
+.env.test.local
+.env.production
+.env.production.local
+.env.*.local
+
+# ── Python / virtual environments ─────────────
+.venv/
+venv/
+env/
+ENV/
+__pycache__/
+*.py[cod]
+*.pyo
+
+# ── Logs ──────────────────────────────────────
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# ── Cache y temporales ─────────────────────────
+.cache/
+.parcel-cache/
+.turbo/
+.eslintcache
+*.tsbuildinfo
+
+# ── Editores / IDEs ───────────────────────────
+.vscode/*
+!.vscode/extensions.json
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+*.DS_Store
+Thumbs.db
+
+# ── Archivos de sistema ───────────────────────
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+
+# ── Certificados / claves ─────────────────────
+*.pem
+*.key
+*.cert
+*.p12
+*.pfx
+
+# ── Supabase local ────────────────────────────
+supabase/.branches/
+supabase/.temp/

@@ -1,347 +1,361 @@
-import { useState } from 'react';
-import { Search, Filter, UserPlus, Eye, Edit, Trophy, Award, Target, TrendingUp, Calendar } from 'lucide-react';
+import { useState, useEffect } from 'react';
+import { Search, UserPlus, Eye, Trophy, Target, TrendingUp, Calendar, Save, ArrowLeft } from 'lucide-react';
+import { supabase } from '../../lib/supabase';
 
-const playersData = [
-  { id: 1, name: 'Carlos Hernández', alias: 'El Tanque', position: 'Delantero', age: 28, team: 'Tigres FC', city: 'CDMX', matches: 45, goals: 18, yellowCards: 3, redCards: 0, reputation: 4.8, avatar: 'CH' },
-  { id: 2, name: 'Miguel Ángel Torres', alias: 'Miguelito', position: 'Mediocampista', age: 25, team: 'Real Unidos', city: 'Guadalajara', matches: 42, goals: 15, yellowCards: 5, redCards: 1, reputation: 4.6, avatar: 'MT' },
-  { id: 3, name: 'Javier Rodríguez', alias: 'El Jefe', position: 'Defensa', age: 30, team: 'Deportivo León', city: 'León', matches: 48, goals: 3, yellowCards: 8, redCards: 0, reputation: 4.7, avatar: 'JR' },
-  { id: 4, name: 'Luis Martínez', alias: 'Luisito', position: 'Portero', age: 27, team: 'FC Guerreros', city: 'Monterrey', matches: 40, goals: 0, yellowCards: 2, redCards: 0, reputation: 4.9, avatar: 'LM' },
-  { id: 5, name: 'Roberto Sánchez', alias: 'Beto', position: 'Delantero', age: 26, team: 'Águilas FC', city: 'CDMX', matches: 38, goals: 12, yellowCards: 4, redCards: 0, reputation: 4.5, avatar: 'RS' },
-];
-
-interface PlayersProps {
-  onNavigate: (view: string, data?: any) => void;
-}
-
-export function Players({ onNavigate }: PlayersProps) {
-  const [view, setView] = useState<'list' | 'profile'>('list');
+export function Players({ onNavigate }: { onNavigate: (view: string) => void }) {
+  const [view, setView] = useState<'list' | 'profile' | 'edit'>('list');
+  const [players, setPlayers] = useState<any[]>([]);
   const [selectedPlayer, setSelectedPlayer] = useState<any>(null);
   const [searchTerm, setSearchTerm] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [currentProfile, setCurrentProfile] = useState<any>(null);
+  const [userRole, setUserRole] = useState('');
+  const [form, setForm] = useState({
+    position: '', jersey_number: '', birth_date: '',
+    height_cm: '', weight_kg: '', dominant_foot: '', bio: ''
+  });
 
-  const viewProfile = (player: any) => {
+  useEffect(() => {
+    fetchPlayers();
+    fetchCurrentUser();
+  }, []);
+
+  const fetchCurrentUser = async () => {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return;
+    const { data: profile } = await supabase
+      .from('profiles').select('*').eq('id', user.id).single();
+    setCurrentProfile(profile);
+    setUserRole(profile?.role || '');
+  };
+
+  const fetchPlayers = async () => {
+    setLoading(true);
+    const { data } = await supabase
+      .from('players')
+      .select(`
+        *,
+        profile:profiles(id, full_name, email, city, state, avatar_url),
+        team:teams(id, name)
+      `)
+      .order('created_at', { ascending: false });
+    setPlayers(data || []);
+    setLoading(false);
+  };
+
+  const openProfile = (player: any) => {
     setSelectedPlayer(player);
     setView('profile');
   };
 
-  if (view === 'profile' && selectedPlayer) {
-    return <PlayerProfile player={selectedPlayer} onBack={() => setView('list')} />;
+  const openEdit = (player: any) => {
+    setSelectedPlayer(player);
+    setForm({
+      position: player.position || '',
+      jersey_number: player.jersey_number || '',
+      birth_date: player.birth_date || '',
+      height_cm: player.height_cm || '',
+      weight_kg: player.weight_kg || '',
+      dominant_foot: player.dominant_foot || '',
+      bio: player.bio || '',
+    });
+    setView('edit');
+  };
+
+  const handleSave = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSaving(true);
+    const { error } = await supabase
+      .from('players')
+      .update({
+        position: form.position || null,
+        jersey_number: form.jersey_number ? parseInt(form.jersey_number) : null,
+        birth_date: form.birth_date || null,
+        height_cm: form.height_cm ? parseInt(form.height_cm) : null,
+        weight_kg: form.weight_kg ? parseInt(form.weight_kg) : null,
+        dominant_foot: form.dominant_foot || null,
+        bio: form.bio || null,
+      })
+      .eq('id', selectedPlayer.id);
+    setSaving(false);
+    if (!error) {
+      await fetchPlayers();
+      setView('list');
+    } else {
+      alert('Error al guardar: ' + error.message);
+    }
+  };
+
+  const handleCreateMyProfile = async () => {
+    if (!currentProfile) {
+      alert('Cargando tu sesión, intenta de nuevo en un momento.');
+      return;
+    }
+
+    // Verificar si ya existe
+    const { data: existing } = await supabase
+      .from('players')
+      .select(`*, profile:profiles(id, full_name, email, city, state, avatar_url), team:teams(id, name)`)
+      .eq('profile_id', currentProfile.id)
+      .single();
+
+    if (existing) {
+      // Ya existe — ir directo a editar
+      openEdit(existing);
+      return;
+    }
+
+    // Crear el perfil nuevo
+    const { data: created, error } = await supabase
+      .from('players')
+      .insert({ profile_id: currentProfile.id })
+      .select(`*, profile:profiles(id, full_name, email, city, state, avatar_url), team:teams(id, name)`)
+      .single();
+
+    if (!error && created) {
+      await fetchPlayers();
+      openEdit(created); // Ir directo al formulario de edición
+    } else {
+      alert('Error al crear perfil: ' + (error?.message || 'desconocido'));
+    }
+  };
+
+  const canEdit = (player: any) => {
+    return userRole === 'admin_plataforma' ||
+      userRole === 'director_liga' ||
+      player.profile?.id === currentProfile?.id;
+  };
+
+  const filteredPlayers = players.filter(p =>
+    p.profile?.full_name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    p.team?.name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    p.position?.toLowerCase().includes(searchTerm.toLowerCase())
+  );
+
+  // ── VISTA EDITAR ──
+  if (view === 'edit' && selectedPlayer) {
+    return (
+      <div className="p-4 lg:p-6 max-w-2xl mx-auto">
+        <button onClick={() => setView('profile')} className="flex items-center gap-2 text-slate-600 hover:text-slate-900 mb-6">
+          <ArrowLeft className="w-4 h-4" /> Volver al perfil
+        </button>
+        <div className="bg-white rounded-xl border border-slate-200 p-6">
+          <h2 className="text-lg font-semibold text-slate-900 mb-6">
+            Editar perfil — {selectedPlayer.profile?.full_name}
+          </h2>
+          <form onSubmit={handleSave} className="space-y-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">Posición</label>
+                <select className="w-full px-3 py-2.5 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
+                  value={form.position} onChange={e => setForm({...form, position: e.target.value})}>
+                  <option value="">Sin asignar</option>
+                  <option value="Portero">Portero</option>
+                  <option value="Defensa">Defensa</option>
+                  <option value="Mediocampista">Mediocampista</option>
+                  <option value="Delantero">Delantero</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">Número de jersey</label>
+                <input type="number" min="1" max="99" placeholder="Ej: 10"
+                  className="w-full px-3 py-2.5 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
+                  value={form.jersey_number} onChange={e => setForm({...form, jersey_number: e.target.value})} />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">Fecha de nacimiento</label>
+                <input type="date"
+                  className="w-full px-3 py-2.5 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
+                  value={form.birth_date} onChange={e => setForm({...form, birth_date: e.target.value})} />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">Pie dominante</label>
+                <select className="w-full px-3 py-2.5 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
+                  value={form.dominant_foot} onChange={e => setForm({...form, dominant_foot: e.target.value})}>
+                  <option value="">Sin asignar</option>
+                  <option value="derecho">Derecho</option>
+                  <option value="izquierdo">Izquierdo</option>
+                  <option value="ambidiestro">Ambidiestro</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">Altura (cm)</label>
+                <input type="number" min="140" max="220" placeholder="Ej: 175"
+                  className="w-full px-3 py-2.5 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
+                  value={form.height_cm} onChange={e => setForm({...form, height_cm: e.target.value})} />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">Peso (kg)</label>
+                <input type="number" min="40" max="150" placeholder="Ej: 70"
+                  className="w-full px-3 py-2.5 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
+                  value={form.weight_kg} onChange={e => setForm({...form, weight_kg: e.target.value})} />
+              </div>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-1">Bio / Presentación</label>
+              <textarea rows={3} placeholder="Cuéntanos sobre ti como jugador..."
+                className="w-full px-3 py-2.5 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500 resize-none"
+                value={form.bio} onChange={e => setForm({...form, bio: e.target.value})} />
+            </div>
+            <div className="flex gap-3 pt-2">
+              <button type="submit" disabled={saving}
+                className="flex items-center gap-2 px-6 py-2.5 bg-green-500 hover:bg-green-600 text-white rounded-lg font-medium transition-colors disabled:opacity-50">
+                <Save className="w-4 h-4" />
+                {saving ? 'Guardando...' : 'Guardar cambios'}
+              </button>
+              <button type="button" onClick={() => setView('profile')}
+                className="px-6 py-2.5 border border-slate-300 text-slate-700 rounded-lg hover:bg-slate-50 transition-colors">
+                Cancelar
+              </button>
+            </div>
+          </form>
+        </div>
+      </div>
+    );
   }
 
-  const filteredPlayers = playersData.filter(player =>
-    player.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    player.alias.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    player.team.toLowerCase().includes(searchTerm.toLowerCase())
-  );
+  // ── VISTA PERFIL ──
+  if (view === 'profile' && selectedPlayer) {
+    const p = selectedPlayer;
+    const age = p.birth_date
+      ? Math.floor((Date.now() - new Date(p.birth_date).getTime()) / (1000 * 60 * 60 * 24 * 365))
+      : null;
+    return (
+      <div className="p-4 lg:p-6 space-y-6 max-w-3xl mx-auto">
+        <button onClick={() => setView('list')} className="flex items-center gap-2 text-slate-600 hover:text-slate-900">
+          <ArrowLeft className="w-4 h-4" /> Volver a jugadores
+        </button>
+        <div className="bg-gradient-to-r from-green-500 to-green-600 rounded-xl p-6 text-white">
+          <div className="flex items-center gap-4">
+            <div className="w-20 h-20 bg-white/20 rounded-full flex items-center justify-center text-3xl font-bold">
+              {p.profile?.full_name?.split(' ').map((n: string) => n[0]).join('').slice(0, 2).toUpperCase()}
+            </div>
+            <div className="flex-1">
+              <h2 className="text-2xl font-bold">{p.profile?.full_name}</h2>
+              <p className="text-green-100">{p.position || 'Posición no asignada'} {p.jersey_number ? `· #${p.jersey_number}` : ''}</p>
+              <p className="text-green-100 text-sm">{p.team?.name || 'Sin equipo'}</p>
+            </div>
+            {canEdit(p) && (
+              <button onClick={() => openEdit(p)}
+                className="px-4 py-2 bg-white/20 hover:bg-white/30 rounded-lg text-sm font-medium transition-colors">
+                Editar perfil
+              </button>
+            )}
+          </div>
+        </div>
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          {[
+            { label: 'Edad', value: age ? `${age} años` : '—' },
+            { label: 'Altura', value: p.height_cm ? `${p.height_cm} cm` : '—' },
+            { label: 'Peso', value: p.weight_kg ? `${p.weight_kg} kg` : '—' },
+            { label: 'Pie dominante', value: p.dominant_foot || '—' },
+          ].map((stat, i) => (
+            <div key={i} className="bg-white rounded-xl border border-slate-200 p-4 text-center">
+              <p className="text-2xl font-bold text-slate-900">{stat.value}</p>
+              <p className="text-sm text-slate-500 mt-1">{stat.label}</p>
+            </div>
+          ))}
+        </div>
+        {p.bio && (
+          <div className="bg-white rounded-xl border border-slate-200 p-6">
+            <h3 className="font-semibold text-slate-900 mb-2">Presentación</h3>
+            <p className="text-slate-600 text-sm leading-relaxed">{p.bio}</p>
+          </div>
+        )}
+        <div className="bg-white rounded-xl border border-slate-200 p-6">
+          <h3 className="font-semibold text-slate-900 mb-4">Estadísticas oficiales</h3>
+          <div className="grid grid-cols-3 gap-4 text-center">
+            <div>
+              <p className="text-3xl font-bold text-green-600">0</p>
+              <p className="text-sm text-slate-500 mt-1">Goles</p>
+            </div>
+            <div>
+              <p className="text-3xl font-bold text-slate-900">0</p>
+              <p className="text-sm text-slate-500 mt-1">Partidos</p>
+            </div>
+            <div>
+              <p className="text-3xl font-bold text-amber-500">0</p>
+              <p className="text-sm text-slate-500 mt-1">Tarjetas</p>
+            </div>
+          </div>
+          <p className="text-xs text-slate-400 text-center mt-4">Las estadísticas se actualizan después de partidos validados</p>
+        </div>
+      </div>
+    );
+  }
 
+  // ── VISTA LISTA ──
   return (
     <div className="p-4 lg:p-6 space-y-6">
-      {/* Header */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
-          <h2>Jugadores Registrados</h2>
-          <p className="text-sm text-slate-500 mt-1">Gestiona perfiles y estadísticas de jugadores</p>
+          <h2 className="text-xl font-bold text-slate-900">Jugadores</h2>
+          <p className="text-sm text-slate-500 mt-1">{players.length} jugadores registrados</p>
         </div>
-        <button className="flex items-center gap-2 px-4 py-2 bg-green-500 text-white rounded-lg hover:bg-green-600">
-          <UserPlus className="w-5 h-5" />
-          Nuevo Jugador
-        </button>
-      </div>
-
-      {/* Filters */}
-      <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <div className="relative">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
-            <input
-              type="text"
-              placeholder="Buscar por nombre, alias o equipo..."
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-              className="w-full pl-10 pr-4 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
-            />
-          </div>
-          <select className="px-4 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500">
-            <option>Todas las posiciones</option>
-            <option>Portero</option>
-            <option>Defensa</option>
-            <option>Mediocampista</option>
-            <option>Delantero</option>
-          </select>
-          <select className="px-4 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500">
-            <option>Todas las ciudades</option>
-            <option>CDMX</option>
-            <option>Guadalajara</option>
-            <option>Monterrey</option>
-            <option>León</option>
-          </select>
-        </div>
-      </div>
-
-      {/* Players Table - Desktop */}
-      <div className="hidden lg:block bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
-        <div className="overflow-x-auto">
-          <table className="w-full">
-            <thead className="bg-slate-50 border-b border-slate-200">
-              <tr>
-                <th className="px-6 py-3 text-left text-sm text-slate-600">Jugador</th>
-                <th className="px-6 py-3 text-left text-sm text-slate-600">Posición</th>
-                <th className="px-6 py-3 text-left text-sm text-slate-600">Equipo</th>
-                <th className="px-6 py-3 text-left text-sm text-slate-600">Ciudad</th>
-                <th className="px-6 py-3 text-center text-sm text-slate-600">Partidos</th>
-                <th className="px-6 py-3 text-center text-sm text-slate-600">Goles</th>
-                <th className="px-6 py-3 text-center text-sm text-slate-600">Tarjetas</th>
-                <th className="px-6 py-3 text-center text-sm text-slate-600">Reputación</th>
-                <th className="px-6 py-3 text-center text-sm text-slate-600">Acciones</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-200">
-              {filteredPlayers.map((player) => (
-                <tr key={player.id} className="hover:bg-slate-50">
-                  <td className="px-6 py-4">
-                    <div className="flex items-center gap-3">
-                      <div className="w-10 h-10 bg-green-500 rounded-full flex items-center justify-center text-white">
-                        {player.avatar}
-                      </div>
-                      <div>
-                        <p className="font-medium text-slate-900">{player.name}</p>
-                        <p className="text-sm text-slate-500">{player.alias}</p>
-                      </div>
-                    </div>
-                  </td>
-                  <td className="px-6 py-4 text-slate-700">{player.position}</td>
-                  <td className="px-6 py-4 text-slate-700">{player.team}</td>
-                  <td className="px-6 py-4 text-slate-700">{player.city}</td>
-                  <td className="px-6 py-4 text-center text-slate-900">{player.matches}</td>
-                  <td className="px-6 py-4 text-center">
-                    <span className="inline-flex items-center gap-1 px-2 py-1 bg-green-100 text-green-700 rounded-lg">
-                      <Target className="w-4 h-4" />
-                      {player.goals}
-                    </span>
-                  </td>
-                  <td className="px-6 py-4 text-center">
-                    <div className="flex items-center justify-center gap-2">
-                      <span className="text-yellow-600">🟨 {player.yellowCards}</span>
-                      <span className="text-red-600">🟥 {player.redCards}</span>
-                    </div>
-                  </td>
-                  <td className="px-6 py-4 text-center">
-                    <div className="flex items-center justify-center gap-1">
-                      <Award className="w-4 h-4 text-yellow-500" />
-                      <span className="font-medium text-slate-900">{player.reputation}</span>
-                    </div>
-                  </td>
-                  <td className="px-6 py-4">
-                    <div className="flex items-center justify-center gap-2">
-                      <button
-                        onClick={() => viewProfile(player)}
-                        className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg"
-                      >
-                        <Eye className="w-5 h-5" />
-                      </button>
-                      <button className="p-2 text-slate-600 hover:bg-slate-100 rounded-lg">
-                        <Edit className="w-5 h-5" />
-                      </button>
-                    </div>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      {/* Players Cards - Mobile */}
-      <div className="lg:hidden space-y-4">
-        {filteredPlayers.map((player) => (
-          <div key={player.id} className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
-            <div className="flex items-start justify-between mb-3">
-              <div className="flex items-center gap-3">
-                <div className="w-12 h-12 bg-green-500 rounded-full flex items-center justify-center text-white">
-                  {player.avatar}
-                </div>
-                <div>
-                  <h4 className="font-medium text-slate-900">{player.name}</h4>
-                  <p className="text-sm text-slate-500">{player.alias}</p>
-                </div>
-              </div>
-              <div className="flex items-center gap-1">
-                <Award className="w-4 h-4 text-yellow-500" />
-                <span className="font-medium">{player.reputation}</span>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-2 gap-2 mb-3 text-sm">
-              <div className="flex items-center gap-2 text-slate-600">
-                <Trophy className="w-4 h-4" />
-                {player.position}
-              </div>
-              <div className="text-slate-600">{player.team}</div>
-              <div className="text-slate-600">{player.city}</div>
-              <div className="flex items-center gap-2 text-green-600">
-                <Target className="w-4 h-4" />
-                {player.goals} goles
-              </div>
-            </div>
-
-            <div className="flex items-center gap-2">
-              <button
-                onClick={() => viewProfile(player)}
-                className="flex-1 flex items-center justify-center gap-2 px-4 py-2 bg-blue-500 text-white rounded-lg"
-              >
-                <Eye className="w-4 h-4" />
-                Ver Perfil
-              </button>
-              <button className="px-4 py-2 border border-slate-300 rounded-lg text-slate-700">
-                <Edit className="w-5 h-5" />
-              </button>
-            </div>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-function PlayerProfile({ player, onBack }: { player: any; onBack: () => void }) {
-  return (
-    <div className="p-4 lg:p-6 space-y-6">
-      <button onClick={onBack} className="text-slate-600 hover:text-slate-900 mb-4">
-        ← Volver a jugadores
-      </button>
-
-      {/* Profile Header */}
-      <div className="bg-gradient-to-r from-green-500 to-green-600 rounded-xl p-6 text-white">
-        <div className="flex flex-col md:flex-row items-center md:items-start gap-6">
-          <div className="w-24 h-24 bg-white/20 rounded-full flex items-center justify-center text-3xl backdrop-blur-sm">
-            {player.avatar}
-          </div>
-          <div className="flex-1 text-center md:text-left">
-            <h2 className="text-white">{player.name}</h2>
-            <p className="text-green-100 mt-1">"{player.alias}"</p>
-            <div className="flex flex-wrap items-center gap-4 mt-4 justify-center md:justify-start">
-              <div className="flex items-center gap-2 bg-white/20 px-3 py-1 rounded-lg">
-                <Trophy className="w-4 h-4" />
-                {player.position}
-              </div>
-              <div className="flex items-center gap-2 bg-white/20 px-3 py-1 rounded-lg">
-                <Calendar className="w-4 h-4" />
-                {player.age} años
-              </div>
-              <div className="flex items-center gap-2 bg-white/20 px-3 py-1 rounded-lg">
-                <Award className="w-4 h-4" />
-                {player.reputation} reputación
-              </div>
-            </div>
-          </div>
-          <button className="px-6 py-2 bg-white text-green-600 rounded-lg hover:bg-green-50">
-            Editar Perfil
+        {userRole === 'jugador' && (
+          <button onClick={handleCreateMyProfile}
+            className="flex items-center gap-2 px-4 py-2 bg-green-500 text-white rounded-lg hover:bg-green-600 transition-colors">
+            <UserPlus className="w-5 h-5" />
+            Crear mi perfil deportivo
           </button>
-        </div>
+        )}
       </div>
 
-      {/* Stats */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <div className="bg-white p-4 rounded-xl border border-slate-200 text-center">
-          <p className="text-sm text-slate-500">Partidos Jugados</p>
-          <p className="text-3xl mt-2">{player.matches}</p>
-        </div>
-        <div className="bg-white p-4 rounded-xl border border-slate-200 text-center">
-          <p className="text-sm text-slate-500">Goles</p>
-          <p className="text-3xl text-green-600 mt-2">{player.goals}</p>
-        </div>
-        <div className="bg-white p-4 rounded-xl border border-slate-200 text-center">
-          <p className="text-sm text-slate-500">Tarjetas Amarillas</p>
-          <p className="text-3xl text-yellow-600 mt-2">{player.yellowCards}</p>
-        </div>
-        <div className="bg-white p-4 rounded-xl border border-slate-200 text-center">
-          <p className="text-sm text-slate-500">Tarjetas Rojas</p>
-          <p className="text-3xl text-red-600 mt-2">{player.redCards}</p>
-        </div>
+      <div className="relative">
+        <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+        <input type="text" placeholder="Buscar por nombre, equipo o posición..."
+          className="w-full pl-10 pr-4 py-2.5 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
+          value={searchTerm} onChange={e => setSearchTerm(e.target.value)} />
       </div>
 
-      {/* Details Grid */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <div className="bg-white p-6 rounded-xl border border-slate-200">
-          <h3 className="mb-4">Información Personal</h3>
-          <div className="space-y-3">
-            <div className="flex justify-between py-2 border-b border-slate-100">
-              <span className="text-slate-600">Nombre Completo:</span>
-              <span className="font-medium">{player.name}</span>
-            </div>
-            <div className="flex justify-between py-2 border-b border-slate-100">
-              <span className="text-slate-600">Alias:</span>
-              <span className="font-medium">{player.alias}</span>
-            </div>
-            <div className="flex justify-between py-2 border-b border-slate-100">
-              <span className="text-slate-600">Edad:</span>
-              <span className="font-medium">{player.age} años</span>
-            </div>
-            <div className="flex justify-between py-2 border-b border-slate-100">
-              <span className="text-slate-600">Posición:</span>
-              <span className="font-medium">{player.position}</span>
-            </div>
-            <div className="flex justify-between py-2 border-b border-slate-100">
-              <span className="text-slate-600">Equipo Actual:</span>
-              <span className="font-medium">{player.team}</span>
-            </div>
-            <div className="flex justify-between py-2">
-              <span className="text-slate-600">Ciudad:</span>
-              <span className="font-medium">{player.city}</span>
-            </div>
+      {loading ? (
+        <div className="text-center py-12 text-slate-500">Cargando jugadores...</div>
+      ) : filteredPlayers.length === 0 ? (
+        <div className="text-center py-12">
+          <div className="w-16 h-16 bg-slate-100 rounded-full flex items-center justify-center mx-auto mb-4">
+            <Trophy className="w-8 h-8 text-slate-400" />
           </div>
+          <p className="text-slate-500 font-medium">No hay jugadores registrados</p>
+          <p className="text-slate-400 text-sm mt-1">Los jugadores aparecerán aquí cuando creen su perfil deportivo</p>
         </div>
-
-        <div className="bg-white p-6 rounded-xl border border-slate-200">
-          <h3 className="mb-4">Historial Reciente</h3>
-          <div className="space-y-3">
-            {[
-              { date: '15 Abr 2026', vs: 'Real Unidos', result: 'V 3-1', goals: 2 },
-              { date: '12 Abr 2026', vs: 'Deportivo León', result: 'E 2-2', goals: 1 },
-              { date: '08 Abr 2026', vs: 'FC Guerreros', result: 'D 1-2', goals: 0 },
-              { date: '05 Abr 2026', vs: 'Águilas FC', result: 'V 4-0', goals: 1 },
-            ].map((match, idx) => (
-              <div key={idx} className="flex items-center justify-between p-3 bg-slate-50 rounded-lg">
-                <div>
-                  <p className="font-medium text-slate-900">vs {match.vs}</p>
-                  <p className="text-sm text-slate-500">{match.date}</p>
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          {filteredPlayers.map((player) => (
+            <div key={player.id} className="bg-white rounded-xl border border-slate-200 p-5 hover:shadow-md transition-shadow">
+              <div className="flex items-center gap-3 mb-4">
+                <div className="w-12 h-12 bg-green-500 rounded-full flex items-center justify-center text-white font-bold">
+                  {player.profile?.full_name?.split(' ').map((n: string) => n[0]).join('').slice(0, 2).toUpperCase()}
                 </div>
-                <div className="text-right">
-                  <p className="font-medium text-slate-900">{match.result}</p>
-                  <p className="text-sm text-green-600">{match.goals} gol{match.goals !== 1 ? 'es' : ''}</p>
+                <div className="flex-1 min-w-0">
+                  <p className="font-semibold text-slate-900 truncate">{player.profile?.full_name}</p>
+                  <p className="text-sm text-slate-500 truncate">{player.team?.name || 'Sin equipo'}</p>
+                </div>
+                {player.jersey_number && (
+                  <span className="text-lg font-bold text-slate-400">#{player.jersey_number}</span>
+                )}
+              </div>
+              <div className="flex items-center justify-between text-sm">
+                <span className="px-2.5 py-1 bg-green-50 text-green-700 rounded-full text-xs font-medium">
+                  {player.position || 'Sin posición'}
+                </span>
+                <div className="flex gap-2">
+                  <button onClick={() => openProfile(player)}
+                    className="flex items-center gap-1 px-3 py-1.5 text-slate-600 hover:bg-slate-100 rounded-lg text-xs transition-colors">
+                    <Eye className="w-3.5 h-3.5" /> Ver
+                  </button>
+                  {canEdit(player) && (
+                    <button onClick={() => openEdit(player)}
+                      className="flex items-center gap-1 px-3 py-1.5 text-green-600 hover:bg-green-50 rounded-lg text-xs transition-colors">
+                      Editar
+                    </button>
+                  )}
                 </div>
               </div>
-            ))}
-          </div>
+            </div>
+          ))}
         </div>
-      </div>
-
-      {/* Reputation Section */}
-      <div className="bg-white p-6 rounded-xl border border-slate-200">
-        <div className="flex items-center justify-between mb-4">
-          <h3>Reputación Deportiva</h3>
-          <div className="flex items-center gap-2">
-            <Award className="w-6 h-6 text-yellow-500" />
-            <span className="text-2xl font-bold">{player.reputation}</span>
-          </div>
-        </div>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <div className="text-center p-4 bg-green-50 rounded-lg">
-            <TrendingUp className="w-8 h-8 text-green-600 mx-auto mb-2" />
-            <p className="text-sm text-slate-600">Puntualidad</p>
-            <p className="text-xl mt-1">4.9</p>
-          </div>
-          <div className="text-center p-4 bg-blue-50 rounded-lg">
-            <Trophy className="w-8 h-8 text-blue-600 mx-auto mb-2" />
-            <p className="text-sm text-slate-600">Fair Play</p>
-            <p className="text-xl mt-1">4.7</p>
-          </div>
-          <div className="text-center p-4 bg-purple-50 rounded-lg">
-            <Target className="w-8 h-8 text-purple-600 mx-auto mb-2" />
-            <p className="text-sm text-slate-600">Rendimiento</p>
-            <p className="text-xl mt-1">4.8</p>
-          </div>
-        </div>
-      </div>
+      )}
     </div>
   );
 }

@@ -1,363 +1,394 @@
-import { Trophy, TrendingUp, Award, Medal, Target, Star } from 'lucide-react';
+import { useState, useEffect } from 'react';
+import { Trophy, Award, TrendingUp, Medal, Target, Star } from 'lucide-react';
+import { supabase } from '../../lib/supabase';
 
-const playersRanking = [
-  { rank: 1, name: 'Carlos Hernández', team: 'Tigres FC', position: 'Delantero', goals: 18, matches: 45, avg: 0.40, reputation: 4.8 },
-  { rank: 2, name: 'Miguel Ángel Torres', team: 'Real Unidos', position: 'Mediocampista', goals: 15, matches: 42, avg: 0.36, reputation: 4.6 },
-  { rank: 3, name: 'Javier Rodríguez', team: 'Deportivo León', position: 'Defensa', goals: 14, matches: 48, avg: 0.29, reputation: 4.7 },
-  { rank: 4, name: 'Luis Martínez', team: 'FC Guerreros', position: 'Delantero', goals: 12, matches: 40, avg: 0.30, reputation: 4.9 },
-  { rank: 5, name: 'Roberto Sánchez', team: 'Águilas FC', position: 'Delantero', goals: 12, matches: 38, avg: 0.32, reputation: 4.5 },
-];
+interface Scorer {
+  player_id: string;
+  profile_id: string;
+  full_name: string;
+  team_name: string | null;
+  position: string | null;
+  goals: number;
+  matches_played: number;
+}
 
-const refereesRanking = [
-  { rank: 1, name: 'Roberto Sánchez', matches: 42, rating: 4.8, punctuality: 4.9, fairness: 4.7, clarity: 4.8 },
-  { rank: 2, name: 'Fernando López', matches: 38, rating: 4.7, punctuality: 4.8, fairness: 4.6, clarity: 4.7 },
-  { rank: 3, name: 'Antonio Ramírez', matches: 35, rating: 4.6, punctuality: 4.5, fairness: 4.7, clarity: 4.6 },
-  { rank: 4, name: 'Jorge Morales', matches: 31, rating: 4.5, punctuality: 4.6, fairness: 4.4, clarity: 4.5 },
-];
+interface RefereeRanking {
+  referee_id: string;
+  full_name: string;
+  total_matches: number;
+  avg_score: number;
+  total_ratings: number;
+}
 
-const teamsRanking = [
-  { rank: 1, name: 'Tigres FC', played: 24, won: 18, drawn: 4, lost: 2, gf: 56, ga: 18, gd: 38, points: 58 },
-  { rank: 2, name: 'Real Unidos', played: 24, won: 16, drawn: 5, lost: 3, gf: 52, ga: 22, gd: 30, points: 53 },
-  { rank: 3, name: 'Deportivo León', played: 24, won: 14, drawn: 6, lost: 4, gf: 48, ga: 25, gd: 23, points: 48 },
-  { rank: 4, name: 'FC Guerreros', played: 24, won: 12, drawn: 7, lost: 5, gf: 42, ga: 28, gd: 14, points: 43 },
-  { rank: 5, name: 'Águilas FC', played: 24, won: 10, drawn: 6, lost: 8, gf: 38, ga: 32, gd: 6, points: 36 },
-];
+interface TeamRanking {
+  team_id: string;
+  name: string;
+  pj: number;
+  pg: number;
+  pe: number;
+  pp: number;
+  gf: number;
+  ga: number;
+  pts: number;
+}
+
+type Tab = 'players' | 'referees' | 'teams';
+
+const medalColor = (rank: number) =>
+  rank === 1 ? 'text-yellow-500' : rank === 2 ? 'text-slate-400' : 'text-amber-600';
 
 export function Rankings() {
+  const [tab, setTab] = useState<Tab>('players');
+  const [scorers, setScorers] = useState<Scorer[]>([]);
+  const [refereeRanks, setRefereeRanks] = useState<RefereeRanking[]>([]);
+  const [teamRanks, setTeamRanks] = useState<TeamRanking[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [filterPosition, setFilterPosition] = useState('');
+  const [loaded, setLoaded] = useState<Set<Tab>>(new Set());
+
+  useEffect(() => {
+    loadTab(tab);
+  }, [tab]);
+
+  const loadTab = async (t: Tab) => {
+    if (loaded.has(t)) return;
+    setLoading(true);
+    if (t === 'players') await fetchScorers();
+    if (t === 'referees') await fetchRefereeRankings();
+    if (t === 'teams') await fetchTeamRankings();
+    setLoaded(prev => new Set(prev).add(t));
+    setLoading(false);
+  };
+
+  const fetchScorers = async () => {
+    // Get all goal events from validated matches
+    const { data: events } = await supabase
+      .from('match_events')
+      .select('player_id, match_id, matches!inner(status)')
+      .eq('event_type', 'goal')
+      .eq('matches.status', 'validated');
+
+    if (!events || events.length === 0) { setScorers([]); return; }
+
+    // Count goals per player
+    const goalMap: Record<string, number> = {};
+    const matchMap: Record<string, Set<string>> = {};
+    events.forEach(ev => {
+      goalMap[ev.player_id] = (goalMap[ev.player_id] || 0) + 1;
+      if (!matchMap[ev.player_id]) matchMap[ev.player_id] = new Set();
+      matchMap[ev.player_id].add(ev.match_id);
+    });
+
+    // Fetch player details
+    const playerIds = Object.keys(goalMap);
+    const { data: players } = await supabase
+      .from('players')
+      .select('id, profile_id, position, team_id, profile:profiles(id, full_name), team:teams(id, name)')
+      .in('id', playerIds);
+
+    const ranked: Scorer[] = (players || []).map(p => ({
+      player_id: p.id,
+      profile_id: p.profile_id,
+      full_name: (p.profile as any)?.full_name || '—',
+      team_name: (p.team as any)?.name || null,
+      position: p.position,
+      goals: goalMap[p.id] || 0,
+      matches_played: matchMap[p.id]?.size || 0,
+    })).sort((a, b) => b.goals - a.goals);
+
+    setScorers(ranked);
+  };
+
+  const fetchRefereeRankings = async () => {
+    const { data: refs } = await supabase.from('referees').select('id, profile:profiles(id, full_name)');
+    if (!refs) { setRefereeRanks([]); return; }
+
+    const enriched = await Promise.all(refs.map(async r => {
+      const { data: ratings } = await supabase.from('referee_ratings').select('score').eq('referee_id', r.id);
+      const { count } = await supabase.from('matches').select('id', { count: 'exact', head: true }).eq('referee_id', r.id).eq('status', 'validated');
+      const scores = (ratings || []).map(x => x.score);
+      const avg = scores.length > 0 ? Math.round((scores.reduce((a, b) => a + b, 0) / scores.length) * 10) / 10 : 0;
+      return { referee_id: r.id, full_name: (r.profile as any)?.full_name || '—', total_matches: count ?? 0, avg_score: avg, total_ratings: scores.length } as RefereeRanking;
+    }));
+
+    setRefereeRanks(enriched.filter(r => r.total_ratings > 0).sort((a, b) => b.avg_score - a.avg_score));
+  };
+
+  const fetchTeamRankings = async () => {
+    const { data: teams } = await supabase.from('teams').select('id, name').eq('status', 'active');
+    if (!teams || teams.length === 0) { setTeamRanks([]); return; }
+
+    const ranked = await Promise.all(teams.map(async t => {
+      const [{ data: home }, { data: away }] = await Promise.all([
+        supabase.from('matches').select('home_score, away_score').eq('home_team_id', t.id).eq('status', 'validated'),
+        supabase.from('matches').select('home_score, away_score').eq('away_team_id', t.id).eq('status', 'validated'),
+      ]);
+      let pj = 0, pg = 0, pe = 0, pp = 0, gf = 0, ga = 0;
+      (home || []).forEach(m => { if (m.home_score == null) return; pj++; gf += m.home_score; ga += m.away_score; if (m.home_score > m.away_score) pg++; else if (m.home_score === m.away_score) pe++; else pp++; });
+      (away || []).forEach(m => { if (m.away_score == null) return; pj++; gf += m.away_score; ga += m.home_score; if (m.away_score > m.home_score) pg++; else if (m.home_score === m.away_score) pe++; else pp++; });
+      return { team_id: t.id, name: t.name, pj, pg, pe, pp, gf, ga, pts: pg * 3 + pe };
+    }));
+
+    setTeamRanks(ranked.filter(t => t.pj > 0).sort((a, b) => b.pts - a.pts || (b.gf - b.ga) - (a.gf - a.ga)));
+  };
+
+  const filteredScorers = filterPosition
+    ? scorers.filter(s => s.position === filterPosition)
+    : scorers;
+
   return (
     <div className="p-4 lg:p-6 space-y-6">
       <div>
-        <h2>Rankings y Estadísticas</h2>
-        <p className="text-sm text-slate-500 mt-1">Rankings oficiales de jugadores, árbitros y equipos</p>
+        <h2 className="text-xl font-bold text-slate-900">Rankings y Estadísticas</h2>
+        <p className="text-sm text-slate-500 mt-1">Datos oficiales de partidos validados</p>
       </div>
 
-      {/* Filter Tabs */}
-      <div className="bg-white p-4 rounded-xl border border-slate-200">
-        <div className="flex flex-wrap gap-2">
-          <button className="px-4 py-2 bg-green-500 text-white rounded-lg">
-            Jugadores
+      {/* Tabs */}
+      <div className="flex gap-2 flex-wrap">
+        {[
+          { key: 'players', label: 'Goleadores', icon: Target },
+          { key: 'referees', label: 'Árbitros', icon: Award },
+          { key: 'teams', label: 'Equipos', icon: TrendingUp },
+        ].map(({ key, label, icon: Icon }) => (
+          <button key={key} onClick={() => setTab(key as Tab)}
+            className={`flex items-center gap-2 px-5 py-2.5 rounded-lg font-medium transition-colors ${tab === key ? 'bg-green-500 text-white' : 'bg-white border border-slate-300 text-slate-700 hover:bg-slate-50'}`}>
+            <Icon className="w-4 h-4" /> {label}
           </button>
-          <button className="px-4 py-2 bg-white border border-slate-300 text-slate-700 rounded-lg hover:bg-slate-50">
-            Árbitros
-          </button>
-          <button className="px-4 py-2 bg-white border border-slate-300 text-slate-700 rounded-lg hover:bg-slate-50">
-            Equipos
-          </button>
-        </div>
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-3 mt-4">
-          <select className="px-3 py-2 border border-slate-300 rounded-lg text-sm">
-            <option>Temporada 2026</option>
-            <option>Temporada 2025</option>
-          </select>
-          <select className="px-3 py-2 border border-slate-300 rounded-lg text-sm">
-            <option>Todas las ligas</option>
-            <option>Liga Centro MX</option>
-            <option>Liga Norte</option>
-          </select>
-          <select className="px-3 py-2 border border-slate-300 rounded-lg text-sm">
-            <option>Todos los estados</option>
-            <option>CDMX</option>
-            <option>Jalisco</option>
-            <option>Nuevo León</option>
-          </select>
-          <select className="px-3 py-2 border border-slate-300 rounded-lg text-sm">
-            <option>Todas las posiciones</option>
-            <option>Portero</option>
-            <option>Defensa</option>
-            <option>Mediocampista</option>
-            <option>Delantero</option>
-          </select>
-        </div>
+        ))}
       </div>
 
-      {/* Players Ranking */}
-      <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
-        <div className="p-4 bg-gradient-to-r from-green-500 to-green-600 text-white flex items-center gap-3">
-          <Trophy className="w-6 h-6" />
-          <h3 className="text-white">Ranking de Goleadores</h3>
-        </div>
-
-        {/* Desktop Table */}
-        <div className="hidden lg:block overflow-x-auto">
-          <table className="w-full">
-            <thead className="bg-slate-50 border-b border-slate-200">
-              <tr>
-                <th className="px-6 py-3 text-left text-sm text-slate-600">Pos</th>
-                <th className="px-6 py-3 text-left text-sm text-slate-600">Jugador</th>
-                <th className="px-6 py-3 text-left text-sm text-slate-600">Equipo</th>
-                <th className="px-6 py-3 text-left text-sm text-slate-600">Posición</th>
-                <th className="px-6 py-3 text-center text-sm text-slate-600">Partidos</th>
-                <th className="px-6 py-3 text-center text-sm text-slate-600">Goles</th>
-                <th className="px-6 py-3 text-center text-sm text-slate-600">Promedio</th>
-                <th className="px-6 py-3 text-center text-sm text-slate-600">Reputación</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-200">
-              {playersRanking.map((player) => (
-                <tr key={player.rank} className="hover:bg-slate-50">
-                  <td className="px-6 py-4">
-                    {player.rank <= 3 ? (
-                      <div className="flex items-center gap-2">
-                        <Medal className={`w-6 h-6 ${
-                          player.rank === 1 ? 'text-yellow-500' :
-                          player.rank === 2 ? 'text-slate-400' :
-                          'text-amber-600'
-                        }`} />
-                        <span className="font-bold">{player.rank}</span>
-                      </div>
-                    ) : (
-                      <span className="font-medium text-slate-600">{player.rank}</span>
-                    )}
-                  </td>
-                  <td className="px-6 py-4 font-medium text-slate-900">{player.name}</td>
-                  <td className="px-6 py-4 text-slate-700">{player.team}</td>
-                  <td className="px-6 py-4 text-slate-700">{player.position}</td>
-                  <td className="px-6 py-4 text-center text-slate-900">{player.matches}</td>
-                  <td className="px-6 py-4 text-center">
-                    <span className="inline-flex items-center gap-1 px-3 py-1 bg-green-100 text-green-700 rounded-lg font-bold">
-                      <Target className="w-4 h-4" />
-                      {player.goals}
-                    </span>
-                  </td>
-                  <td className="px-6 py-4 text-center text-slate-900">{player.avg.toFixed(2)}</td>
-                  <td className="px-6 py-4 text-center">
-                    <div className="flex items-center justify-center gap-1">
-                      <Star className="w-4 h-4 text-yellow-500 fill-yellow-500" />
-                      <span className="font-medium">{player.reputation}</span>
-                    </div>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-
-        {/* Mobile Cards */}
-        <div className="lg:hidden p-4 space-y-4">
-          {playersRanking.map((player) => (
-            <div key={player.rank} className="p-4 bg-slate-50 rounded-lg">
-              <div className="flex items-start justify-between mb-3">
+      {loading ? (
+        <div className="text-center py-16 text-slate-500">Calculando rankings...</div>
+      ) : (
+        <>
+          {/* PLAYERS */}
+          {tab === 'players' && (
+            <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
+              <div className="p-4 bg-gradient-to-r from-green-500 to-green-600 text-white flex items-center justify-between">
                 <div className="flex items-center gap-3">
-                  {player.rank <= 3 && (
-                    <Medal className={`w-6 h-6 ${
-                      player.rank === 1 ? 'text-yellow-500' :
-                      player.rank === 2 ? 'text-slate-400' :
-                      'text-amber-600'
-                    }`} />
-                  )}
-                  <div>
-                    <p className="font-bold text-slate-900">#{player.rank} {player.name}</p>
-                    <p className="text-sm text-slate-500">{player.team}</p>
+                  <Trophy className="w-6 h-6" />
+                  <h3 className="text-white font-semibold">Ranking de Goleadores</h3>
+                </div>
+                <select className="bg-white/20 border border-white/30 text-white rounded-lg px-3 py-1.5 text-sm"
+                  value={filterPosition} onChange={e => setFilterPosition(e.target.value)}>
+                  <option value="">Todas las posiciones</option>
+                  <option value="Portero">Portero</option>
+                  <option value="Defensa">Defensa</option>
+                  <option value="Mediocampista">Mediocampista</option>
+                  <option value="Delantero">Delantero</option>
+                </select>
+              </div>
+              {filteredScorers.length === 0 ? (
+                <div className="p-12 text-center text-slate-400">
+                  <Target className="w-10 h-10 mx-auto mb-3" />
+                  <p>Sin goles registrados en partidos validados</p>
+                </div>
+              ) : (
+                <>
+                  <div className="hidden lg:block overflow-x-auto">
+                    <table className="w-full">
+                      <thead className="bg-slate-50 border-b border-slate-200">
+                        <tr>
+                          <th className="px-6 py-3 text-left text-xs text-slate-500 uppercase">Pos</th>
+                          <th className="px-6 py-3 text-left text-xs text-slate-500 uppercase">Jugador</th>
+                          <th className="px-6 py-3 text-left text-xs text-slate-500 uppercase">Equipo</th>
+                          <th className="px-6 py-3 text-left text-xs text-slate-500 uppercase">Posición</th>
+                          <th className="px-6 py-3 text-center text-xs text-slate-500 uppercase">PJ</th>
+                          <th className="px-6 py-3 text-center text-xs text-slate-500 uppercase">Goles</th>
+                          <th className="px-6 py-3 text-center text-xs text-slate-500 uppercase">Promedio</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {filteredScorers.map((s, i) => (
+                          <tr key={s.player_id} className="hover:bg-slate-50">
+                            <td className="px-6 py-4">
+                              {i < 3 ? <Medal className={`w-5 h-5 ${medalColor(i + 1)}`} /> : <span className="text-slate-500 font-medium">{i + 1}</span>}
+                            </td>
+                            <td className="px-6 py-4 font-medium text-slate-900">{s.full_name}</td>
+                            <td className="px-6 py-4 text-slate-600">{s.team_name || '—'}</td>
+                            <td className="px-6 py-4">
+                              <span className="px-2.5 py-1 bg-slate-100 text-slate-600 rounded-full text-xs">{s.position || '—'}</span>
+                            </td>
+                            <td className="px-6 py-4 text-center text-slate-700">{s.matches_played}</td>
+                            <td className="px-6 py-4 text-center">
+                              <span className="inline-flex items-center gap-1 px-3 py-1 bg-green-100 text-green-700 rounded-lg font-bold">
+                                <Target className="w-3.5 h-3.5" /> {s.goals}
+                              </span>
+                            </td>
+                            <td className="px-6 py-4 text-center text-slate-700">
+                              {s.matches_played > 0 ? (s.goals / s.matches_played).toFixed(2) : '—'}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
                   </div>
-                </div>
-                <div className="flex items-center gap-1">
-                  <Star className="w-4 h-4 text-yellow-500 fill-yellow-500" />
-                  <span className="font-medium">{player.reputation}</span>
-                </div>
-              </div>
-              <div className="grid grid-cols-3 gap-3 text-center">
-                <div>
-                  <p className="text-sm text-slate-500">Partidos</p>
-                  <p className="font-bold text-slate-900">{player.matches}</p>
-                </div>
-                <div>
-                  <p className="text-sm text-slate-500">Goles</p>
-                  <p className="font-bold text-green-600">{player.goals}</p>
-                </div>
-                <div>
-                  <p className="text-sm text-slate-500">Promedio</p>
-                  <p className="font-bold text-slate-900">{player.avg.toFixed(2)}</p>
-                </div>
-              </div>
-            </div>
-          ))}
-        </div>
-      </div>
-
-      {/* Referees Ranking */}
-      <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
-        <div className="p-4 bg-gradient-to-r from-blue-500 to-blue-600 text-white flex items-center gap-3">
-          <Award className="w-6 h-6" />
-          <h3 className="text-white">Ranking de Árbitros</h3>
-        </div>
-
-        <div className="hidden lg:block overflow-x-auto">
-          <table className="w-full">
-            <thead className="bg-slate-50 border-b border-slate-200">
-              <tr>
-                <th className="px-6 py-3 text-left text-sm text-slate-600">Pos</th>
-                <th className="px-6 py-3 text-left text-sm text-slate-600">Árbitro</th>
-                <th className="px-6 py-3 text-center text-sm text-slate-600">Partidos</th>
-                <th className="px-6 py-3 text-center text-sm text-slate-600">Calificación</th>
-                <th className="px-6 py-3 text-center text-sm text-slate-600">Puntualidad</th>
-                <th className="px-6 py-3 text-center text-sm text-slate-600">Imparcialidad</th>
-                <th className="px-6 py-3 text-center text-sm text-slate-600">Claridad</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-200">
-              {refereesRanking.map((referee) => (
-                <tr key={referee.rank} className="hover:bg-slate-50">
-                  <td className="px-6 py-4">
-                    {referee.rank <= 3 ? (
-                      <div className="flex items-center gap-2">
-                        <Medal className={`w-6 h-6 ${
-                          referee.rank === 1 ? 'text-yellow-500' :
-                          referee.rank === 2 ? 'text-slate-400' :
-                          'text-amber-600'
-                        }`} />
-                        <span className="font-bold">{referee.rank}</span>
+                  <div className="lg:hidden p-4 space-y-3">
+                    {filteredScorers.map((s, i) => (
+                      <div key={s.player_id} className="flex items-center gap-3 p-3 bg-slate-50 rounded-lg">
+                        <div className="w-8 text-center">
+                          {i < 3 ? <Medal className={`w-5 h-5 mx-auto ${medalColor(i + 1)}`} /> : <span className="text-slate-500 font-medium">{i + 1}</span>}
+                        </div>
+                        <div className="flex-1">
+                          <p className="font-medium text-slate-900">{s.full_name}</p>
+                          <p className="text-xs text-slate-500">{s.team_name || '—'} · {s.position || '—'}</p>
+                        </div>
+                        <div className="flex items-center gap-1 font-bold text-green-600">
+                          <Target className="w-4 h-4" /> {s.goals}
+                        </div>
                       </div>
-                    ) : (
-                      <span className="font-medium text-slate-600">{referee.rank}</span>
-                    )}
-                  </td>
-                  <td className="px-6 py-4 font-medium text-slate-900">{referee.name}</td>
-                  <td className="px-6 py-4 text-center text-slate-900">{referee.matches}</td>
-                  <td className="px-6 py-4 text-center">
-                    <span className="inline-flex items-center gap-1 px-3 py-1 bg-blue-100 text-blue-700 rounded-lg font-bold">
-                      <Star className="w-4 h-4" />
-                      {referee.rating}
-                    </span>
-                  </td>
-                  <td className="px-6 py-4 text-center text-slate-900">{referee.punctuality}</td>
-                  <td className="px-6 py-4 text-center text-slate-900">{referee.fairness}</td>
-                  <td className="px-6 py-4 text-center text-slate-900">{referee.clarity}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-
-        <div className="lg:hidden p-4 space-y-4">
-          {refereesRanking.map((referee) => (
-            <div key={referee.rank} className="p-4 bg-slate-50 rounded-lg">
-              <div className="flex items-center gap-3 mb-3">
-                {referee.rank <= 3 && (
-                  <Medal className={`w-6 h-6 ${
-                    referee.rank === 1 ? 'text-yellow-500' :
-                    referee.rank === 2 ? 'text-slate-400' :
-                    'text-amber-600'
-                  }`} />
-                )}
-                <div className="flex-1">
-                  <p className="font-bold text-slate-900">#{referee.rank} {referee.name}</p>
-                  <p className="text-sm text-slate-500">{referee.matches} partidos</p>
-                </div>
-                <div className="flex items-center gap-1">
-                  <Star className="w-5 h-5 text-blue-500" />
-                  <span className="font-bold text-lg">{referee.rating}</span>
-                </div>
-              </div>
-              <div className="grid grid-cols-3 gap-2 text-center text-sm">
-                <div>
-                  <p className="text-slate-500">Puntualidad</p>
-                  <p className="font-medium">{referee.punctuality}</p>
-                </div>
-                <div>
-                  <p className="text-slate-500">Imparcialidad</p>
-                  <p className="font-medium">{referee.fairness}</p>
-                </div>
-                <div>
-                  <p className="text-slate-500">Claridad</p>
-                  <p className="font-medium">{referee.clarity}</p>
-                </div>
-              </div>
+                    ))}
+                  </div>
+                </>
+              )}
             </div>
-          ))}
-        </div>
-      </div>
+          )}
 
-      {/* Teams Ranking */}
-      <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
-        <div className="p-4 bg-gradient-to-r from-purple-500 to-purple-600 text-white flex items-center gap-3">
-          <TrendingUp className="w-6 h-6" />
-          <h3 className="text-white">Tabla de Posiciones</h3>
-        </div>
-
-        <div className="hidden lg:block overflow-x-auto">
-          <table className="w-full">
-            <thead className="bg-slate-50 border-b border-slate-200">
-              <tr>
-                <th className="px-6 py-3 text-left text-sm text-slate-600">Pos</th>
-                <th className="px-6 py-3 text-left text-sm text-slate-600">Equipo</th>
-                <th className="px-6 py-3 text-center text-sm text-slate-600">PJ</th>
-                <th className="px-6 py-3 text-center text-sm text-slate-600">PG</th>
-                <th className="px-6 py-3 text-center text-sm text-slate-600">PE</th>
-                <th className="px-6 py-3 text-center text-sm text-slate-600">PP</th>
-                <th className="px-6 py-3 text-center text-sm text-slate-600">GF</th>
-                <th className="px-6 py-3 text-center text-sm text-slate-600">GC</th>
-                <th className="px-6 py-3 text-center text-sm text-slate-600">DG</th>
-                <th className="px-6 py-3 text-center text-sm text-slate-600">Pts</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-200">
-              {teamsRanking.map((team) => (
-                <tr key={team.rank} className="hover:bg-slate-50">
-                  <td className="px-6 py-4 font-bold text-slate-900">{team.rank}</td>
-                  <td className="px-6 py-4 font-medium text-slate-900">{team.name}</td>
-                  <td className="px-6 py-4 text-center text-slate-700">{team.played}</td>
-                  <td className="px-6 py-4 text-center text-green-600">{team.won}</td>
-                  <td className="px-6 py-4 text-center text-slate-600">{team.drawn}</td>
-                  <td className="px-6 py-4 text-center text-red-600">{team.lost}</td>
-                  <td className="px-6 py-4 text-center text-slate-700">{team.gf}</td>
-                  <td className="px-6 py-4 text-center text-slate-700">{team.ga}</td>
-                  <td className="px-6 py-4 text-center text-slate-900">{team.gd > 0 ? `+${team.gd}` : team.gd}</td>
-                  <td className="px-6 py-4 text-center">
-                    <span className="inline-flex items-center px-3 py-1 bg-purple-100 text-purple-700 rounded-lg font-bold">
-                      {team.points}
-                    </span>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-
-        <div className="lg:hidden p-4 space-y-4">
-          {teamsRanking.map((team) => (
-            <div key={team.rank} className="p-4 bg-slate-50 rounded-lg">
-              <div className="flex items-center justify-between mb-3">
-                <div>
-                  <p className="font-bold text-slate-900">#{team.rank} {team.name}</p>
-                  <p className="text-sm text-slate-500">{team.played} partidos jugados</p>
-                </div>
-                <div className="text-center">
-                  <p className="text-2xl font-bold text-purple-600">{team.points}</p>
-                  <p className="text-xs text-slate-500">puntos</p>
-                </div>
+          {/* REFEREES */}
+          {tab === 'referees' && (
+            <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
+              <div className="p-4 bg-gradient-to-r from-blue-500 to-blue-600 text-white flex items-center gap-3">
+                <Award className="w-6 h-6" />
+                <h3 className="text-white font-semibold">Ranking de Árbitros</h3>
+                <span className="text-blue-100 text-xs ml-1">(solo árbitros con calificaciones)</span>
               </div>
-              <div className="grid grid-cols-5 gap-2 text-center text-sm">
-                <div>
-                  <p className="text-slate-500">PG</p>
-                  <p className="font-medium text-green-600">{team.won}</p>
+              {refereeRanks.length === 0 ? (
+                <div className="p-12 text-center text-slate-400">
+                  <Star className="w-10 h-10 mx-auto mb-3" />
+                  <p>Sin calificaciones registradas aún</p>
                 </div>
-                <div>
-                  <p className="text-slate-500">PE</p>
-                  <p className="font-medium">{team.drawn}</p>
-                </div>
-                <div>
-                  <p className="text-slate-500">PP</p>
-                  <p className="font-medium text-red-600">{team.lost}</p>
-                </div>
-                <div>
-                  <p className="text-slate-500">GF</p>
-                  <p className="font-medium">{team.gf}</p>
-                </div>
-                <div>
-                  <p className="text-slate-500">GC</p>
-                  <p className="font-medium">{team.ga}</p>
-                </div>
-              </div>
+              ) : (
+                <>
+                  <div className="hidden lg:block overflow-x-auto">
+                    <table className="w-full">
+                      <thead className="bg-slate-50 border-b border-slate-200">
+                        <tr>
+                          <th className="px-6 py-3 text-left text-xs text-slate-500 uppercase">Pos</th>
+                          <th className="px-6 py-3 text-left text-xs text-slate-500 uppercase">Árbitro</th>
+                          <th className="px-6 py-3 text-center text-xs text-slate-500 uppercase">Partidos</th>
+                          <th className="px-6 py-3 text-center text-xs text-slate-500 uppercase">Calificación</th>
+                          <th className="px-6 py-3 text-center text-xs text-slate-500 uppercase">Reseñas</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {refereeRanks.map((r, i) => (
+                          <tr key={r.referee_id} className="hover:bg-slate-50">
+                            <td className="px-6 py-4">
+                              {i < 3 ? <Medal className={`w-5 h-5 ${medalColor(i + 1)}`} /> : <span className="text-slate-500 font-medium">{i + 1}</span>}
+                            </td>
+                            <td className="px-6 py-4 font-medium text-slate-900">{r.full_name}</td>
+                            <td className="px-6 py-4 text-center text-slate-700">{r.total_matches}</td>
+                            <td className="px-6 py-4 text-center">
+                              <span className="inline-flex items-center gap-1 px-3 py-1 bg-blue-100 text-blue-700 rounded-lg font-bold">
+                                <Star className="w-3.5 h-3.5 fill-blue-700" /> {r.avg_score}
+                              </span>
+                            </td>
+                            <td className="px-6 py-4 text-center text-slate-600">{r.total_ratings}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                  <div className="lg:hidden p-4 space-y-3">
+                    {refereeRanks.map((r, i) => (
+                      <div key={r.referee_id} className="flex items-center gap-3 p-3 bg-slate-50 rounded-lg">
+                        <div className="w-8 text-center">
+                          {i < 3 ? <Medal className={`w-5 h-5 mx-auto ${medalColor(i + 1)}`} /> : <span className="text-slate-500 font-medium">{i + 1}</span>}
+                        </div>
+                        <div className="flex-1">
+                          <p className="font-medium text-slate-900">{r.full_name}</p>
+                          <p className="text-xs text-slate-500">{r.total_matches} partidos · {r.total_ratings} reseñas</p>
+                        </div>
+                        <div className="flex items-center gap-1 font-bold text-blue-600">
+                          <Star className="w-4 h-4 fill-blue-600" /> {r.avg_score}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </>
+              )}
             </div>
-          ))}
-        </div>
-      </div>
+          )}
 
-      {/* Note */}
-      <div className="bg-blue-50 border border-blue-200 rounded-xl p-4">
-        <p className="text-sm text-blue-900">
-          <strong>Nota:</strong> Los rankings se actualizan automáticamente después de cada partido validado por el encargado de liga.
-        </p>
+          {/* TEAMS */}
+          {tab === 'teams' && (
+            <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
+              <div className="p-4 bg-gradient-to-r from-purple-500 to-purple-600 text-white flex items-center gap-3">
+                <TrendingUp className="w-6 h-6" />
+                <h3 className="text-white font-semibold">Tabla de Posiciones</h3>
+                <span className="text-purple-100 text-xs ml-1">(partidos validados)</span>
+              </div>
+              {teamRanks.length === 0 ? (
+                <div className="p-12 text-center text-slate-400">
+                  <TrendingUp className="w-10 h-10 mx-auto mb-3" />
+                  <p>Sin partidos validados aún</p>
+                </div>
+              ) : (
+                <>
+                  <div className="hidden lg:block overflow-x-auto">
+                    <table className="w-full">
+                      <thead className="bg-slate-50 border-b border-slate-200">
+                        <tr>
+                          {['Pos', 'Equipo', 'PJ', 'PG', 'PE', 'PP', 'GF', 'GC', 'DG', 'Pts'].map(h => (
+                            <th key={h} className={`px-4 py-3 text-xs text-slate-500 uppercase ${h === 'Equipo' ? 'text-left' : 'text-center'}`}>{h}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {teamRanks.map((t, i) => {
+                          const dg = t.gf - t.ga;
+                          return (
+                            <tr key={t.team_id} className={`hover:bg-slate-50 ${i === 0 ? 'bg-yellow-50/40' : ''}`}>
+                              <td className="px-4 py-4 text-center">
+                                {i < 3 ? <Medal className={`w-5 h-5 mx-auto ${medalColor(i + 1)}`} /> : <span className="text-slate-500">{i + 1}</span>}
+                              </td>
+                              <td className="px-4 py-4 font-semibold text-slate-900">{t.name}</td>
+                              <td className="px-4 py-4 text-center text-slate-700">{t.pj}</td>
+                              <td className="px-4 py-4 text-center text-green-600 font-medium">{t.pg}</td>
+                              <td className="px-4 py-4 text-center text-slate-600">{t.pe}</td>
+                              <td className="px-4 py-4 text-center text-red-500">{t.pp}</td>
+                              <td className="px-4 py-4 text-center text-slate-700">{t.gf}</td>
+                              <td className="px-4 py-4 text-center text-slate-700">{t.ga}</td>
+                              <td className="px-4 py-4 text-center font-medium">{dg > 0 ? `+${dg}` : dg}</td>
+                              <td className="px-4 py-4 text-center">
+                                <span className="inline-flex px-3 py-1 bg-purple-100 text-purple-700 rounded-lg font-bold">{t.pts}</span>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                  <div className="lg:hidden p-4 space-y-3">
+                    {teamRanks.map((t, i) => (
+                      <div key={t.team_id} className="p-4 bg-slate-50 rounded-lg">
+                        <div className="flex items-center justify-between mb-2">
+                          <div className="flex items-center gap-2">
+                            {i < 3 ? <Medal className={`w-5 h-5 ${medalColor(i + 1)}`} /> : <span className="text-slate-400 font-medium">{i + 1}</span>}
+                            <span className="font-semibold text-slate-900">{t.name}</span>
+                          </div>
+                          <span className="text-2xl font-bold text-purple-600">{t.pts} pts</span>
+                        </div>
+                        <div className="grid grid-cols-5 gap-1 text-center text-xs">
+                          {[['PJ', t.pj], ['PG', t.pg], ['PE', t.pe], ['PP', t.pp], ['DG', t.gf - t.ga]].map(([k, v]) => (
+                            <div key={k}>
+                              <p className="text-slate-400">{k}</p>
+                              <p className={`font-medium ${k === 'PG' ? 'text-green-600' : k === 'PP' ? 'text-red-500' : 'text-slate-700'}`}>{v}</p>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </>
+              )}
+            </div>
+          )}
+        </>
+      )}
+
+      <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 text-sm text-blue-800">
+        <strong>Nota:</strong> Los rankings se actualizan con datos de partidos con estado <em>Validado</em> por el director de liga.
       </div>
     </div>
   );
