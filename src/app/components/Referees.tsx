@@ -64,21 +64,65 @@ export function Referees() {
 
   const fetchReferees = async () => {
     setLoading(true);
-    const { data: refs } = await supabase.from('referees').select('*, profile:profiles(id, full_name, email, city)');
 
-    if (!refs) { setLoading(false); return; }
+    // Source of truth: all approved arbitro profiles
+    const { data: arbitroProfiles } = await supabase
+      .from('profiles')
+      .select('id, full_name, email, city')
+      .eq('role', 'arbitro')
+      .eq('status', 'active');
 
-    const enriched = await Promise.all(refs.map(async r => {
-      const { data: ratings } = await supabase.from('referee_ratings').select('score').eq('referee_id', r.id);
-      const { count: matchCount } = await supabase
-        .from('matches').select('id', { count: 'exact', head: true }).eq('referee_id', r.id).eq('status', 'validated');
-      const scores = (ratings || []).map(x => x.score);
-      const avg = scores.length > 0 ? scores.reduce((a, b) => a + b, 0) / scores.length : null;
+    if (!arbitroProfiles || arbitroProfiles.length === 0) {
+      setReferees([]);
+      setLoading(false);
+      return;
+    }
+
+    // Get existing referee rows
+    const { data: refRows } = await supabase
+      .from('referees')
+      .select('*')
+      .in('profile_id', arbitroProfiles.map(p => p.id));
+
+    const refByProfile: Record<string, any> = {};
+    (refRows || []).forEach(r => { refByProfile[r.profile_id] = r; });
+
+    // Auto-create missing referee rows for already-approved profiles
+    const missing = arbitroProfiles.filter(p => !refByProfile[p.id]);
+    if (missing.length > 0) {
+      const { data: created } = await supabase
+        .from('referees')
+        .insert(missing.map(p => ({ profile_id: p.id, approved_at: new Date().toISOString() })))
+        .select('*');
+      (created || []).forEach(r => { refByProfile[r.profile_id] = r; });
+    }
+
+    // Enrich with ratings and match count
+    const enriched = await Promise.all(arbitroProfiles.map(async prof => {
+      const ref = refByProfile[prof.id];
+      const refId = ref?.id;
+      let avg_score = null, total_ratings = 0, total_matches = 0;
+      if (refId) {
+        const { data: ratings } = await supabase.from('referee_ratings').select('score').eq('referee_id', refId);
+        const { count: matchCount } = await supabase
+          .from('matches').select('id', { count: 'exact', head: true }).eq('referee_id', refId).eq('status', 'validated');
+        const scores = (ratings || []).map((x: any) => x.score);
+        avg_score = scores.length > 0 ? Math.round((scores.reduce((a: number, b: number) => a + b, 0) / scores.length) * 10) / 10 : null;
+        total_ratings = scores.length;
+        total_matches = matchCount ?? 0;
+      }
       return {
-        ...r,
-        avg_score: avg ? Math.round(avg * 10) / 10 : null,
-        total_ratings: scores.length,
-        total_matches: matchCount ?? 0,
+        id: ref?.id ?? prof.id,
+        profile_id: prof.id,
+        license_number: ref?.license_number ?? null,
+        experience_years: ref?.experience_years ?? null,
+        city: ref?.city ?? prof.city ?? null,
+        state: ref?.state ?? null,
+        approved_at: ref?.approved_at ?? null,
+        profile: prof,
+        avg_score,
+        total_ratings,
+        total_matches,
       } as RefereeRow;
     }));
 
