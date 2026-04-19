@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Shield, Plus, ArrowLeft, Save, UserMinus, Search, Users } from 'lucide-react';
+import { Shield, Plus, ArrowLeft, Save, UserMinus, Search, Users, Pencil, Trash2 } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
 
 interface Profile { id: string; full_name: string; email: string; }
@@ -27,7 +27,7 @@ const initials = (name: string) =>
   name?.split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase() || '?';
 
 export function Teams() {
-  const [view, setView] = useState<'list' | 'detail' | 'create'>('list');
+  const [view, setView] = useState<'list' | 'detail' | 'create' | 'edit'>('list');
   const [teams, setTeams] = useState<Team[]>([]);
   const [selectedTeam, setSelectedTeam] = useState<Team | null>(null);
   const [squad, setSquad] = useState<Player[]>([]);
@@ -40,6 +40,8 @@ export function Teams() {
   const [searchPlayer, setSearchPlayer] = useState('');
   const [matchStats, setMatchStats] = useState({ pj: 0, pg: 0, pe: 0, pp: 0, gf: 0, ga: 0, pts: 0 });
   const [form, setForm] = useState({ name: '', league_id: '', city: '', status: 'active' });
+  const [editForm, setEditForm] = useState({ name: '', league_id: '', city: '', status: 'active' });
+  const [editingTeam, setEditingTeam] = useState<Team | null>(null);
   const [error, setError] = useState('');
 
   useEffect(() => {
@@ -143,6 +145,65 @@ export function Teams() {
     setSaving(false);
   };
 
+  const openEdit = (team: Team) => {
+    setEditingTeam(team);
+    setEditForm({ name: team.name, league_id: team.league_id || '', city: team.city || '', status: team.status });
+    setError('');
+    setView('edit');
+  };
+
+  const handleEditTeam = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingTeam) return;
+    setError('');
+    setSaving(true);
+    const { error: err } = await supabase
+      .from('teams')
+      .update({ name: editForm.name, league_id: editForm.league_id || null, city: editForm.city || null, status: editForm.status })
+      .eq('id', editingTeam.id);
+    if (!err) {
+      try { await supabase.from('audit_logs').insert({ user_id: currentProfile?.id, action: 'edit_team', table_name: 'teams', record_id: editingTeam.id, new_value: editForm.name }); } catch (_) {}
+      await fetchTeams();
+      setEditingTeam(null);
+      setView('list');
+    } else {
+      setError(err?.message || 'Error al guardar cambios');
+    }
+    setSaving(false);
+  };
+
+  const handleDeleteTeam = async (team: Team) => {
+    const { count: activeMatches } = await supabase
+      .from('matches')
+      .select('id', { count: 'exact', head: true })
+      .or(`home_team_id.eq.${team.id},away_team_id.eq.${team.id}`)
+      .in('status', ['scheduled', 'in_progress', 'pending_validation']);
+
+    if ((activeMatches ?? 0) > 0) {
+      alert(`No se puede eliminar "${team.name}" porque tiene ${activeMatches} partido(s) activo(s). Primero cancela o finaliza esos partidos.`);
+      return;
+    }
+
+    const playerMsg = team.player_count > 0
+      ? `\n⚠️ Tiene ${team.player_count} jugador(es) asignado(s) que quedarán sin equipo.`
+      : '';
+
+    if (!window.confirm(`¿Eliminar el equipo "${team.name}"?${playerMsg}\n\nEsta acción no se puede deshacer.`)) return;
+
+    setSaving(true);
+    // Desasignar jugadores primero
+    await supabase.from('players').update({ team_id: null }).eq('team_id', team.id);
+    const { error: err } = await supabase.from('teams').delete().eq('id', team.id);
+    if (!err) {
+      try { await supabase.from('audit_logs').insert({ user_id: currentProfile?.id, action: 'delete_team', table_name: 'teams', record_id: team.id, new_value: team.name }); } catch (_) {}
+      if (view === 'detail') setView('list');
+      await fetchTeams();
+    } else {
+      alert('Error al eliminar: ' + err.message);
+    }
+    setSaving(false);
+  };
+
   const handleAssignPlayer = async (playerId: string) => {
     if (!selectedTeam) return;
     const { error: err } = await supabase.from('players').update({ team_id: selectedTeam.id }).eq('id', playerId);
@@ -161,6 +222,61 @@ export function Teams() {
   const filteredAvailable = available.filter(p =>
     p.profile?.full_name?.toLowerCase().includes(searchPlayer.toLowerCase())
   );
+
+  // ── EDIT ──
+  if (view === 'edit' && editingTeam) {
+    return (
+      <div className="p-4 lg:p-6 max-w-xl mx-auto">
+        <button onClick={() => setView('list')} className="flex items-center gap-2 text-slate-600 hover:text-slate-900 mb-6">
+          <ArrowLeft className="w-4 h-4" /> Volver
+        </button>
+        <div className="bg-white rounded-xl border border-slate-200 p-6">
+          <h2 className="text-lg font-semibold text-slate-900 mb-6">Editar Equipo</h2>
+          {error && <p className="mb-4 text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">{error}</p>}
+          <form onSubmit={handleEditTeam} className="space-y-4">
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-1">Nombre del equipo *</label>
+              <input required type="text" placeholder="Ej: Tigres FC"
+                className="w-full px-3 py-2.5 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
+                value={editForm.name} onChange={e => setEditForm({ ...editForm, name: e.target.value })} />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-1">Liga</label>
+              <select className="w-full px-3 py-2.5 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
+                value={editForm.league_id} onChange={e => setEditForm({ ...editForm, league_id: e.target.value })}>
+                <option value="">Sin liga asignada</option>
+                {leagues.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-1">Ciudad</label>
+              <input type="text" placeholder="Ej: Cancún, Q. Roo"
+                className="w-full px-3 py-2.5 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
+                value={editForm.city} onChange={e => setEditForm({ ...editForm, city: e.target.value })} />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-1">Estado</label>
+              <select className="w-full px-3 py-2.5 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
+                value={editForm.status} onChange={e => setEditForm({ ...editForm, status: e.target.value })}>
+                <option value="active">Activo</option>
+                <option value="inactive">Inactivo</option>
+              </select>
+            </div>
+            <div className="flex gap-3 pt-2">
+              <button type="submit" disabled={saving}
+                className="flex items-center gap-2 px-6 py-2.5 bg-green-500 hover:bg-green-600 text-white rounded-lg font-medium transition-colors disabled:opacity-50">
+                <Save className="w-4 h-4" /> {saving ? 'Guardando...' : 'Guardar Cambios'}
+              </button>
+              <button type="button" onClick={() => setView('list')}
+                className="px-6 py-2.5 border border-slate-300 text-slate-700 rounded-lg hover:bg-slate-50">
+                Cancelar
+              </button>
+            </div>
+          </form>
+        </div>
+      </div>
+    );
+  }
 
   // ── CREATE ──
   if (view === 'create') {
@@ -239,6 +355,18 @@ export function Teams() {
                 {t.status === 'active' ? 'Activo' : 'Inactivo'}
               </span>
             </div>
+            {canManage && (
+              <div className="flex flex-col gap-2">
+                <button onClick={() => openEdit(t)}
+                  className="flex items-center gap-1.5 px-3 py-1.5 bg-white/20 hover:bg-white/30 text-white rounded-lg text-sm font-medium transition-colors">
+                  <Pencil className="w-3.5 h-3.5" /> Editar
+                </button>
+                <button onClick={() => handleDeleteTeam(t)} disabled={saving}
+                  className="flex items-center gap-1.5 px-3 py-1.5 bg-red-500/80 hover:bg-red-600 text-white rounded-lg text-sm font-medium transition-colors disabled:opacity-50">
+                  <Trash2 className="w-3.5 h-3.5" /> Eliminar
+                </button>
+              </div>
+            )}
           </div>
         </div>
 
@@ -422,10 +550,24 @@ export function Teams() {
                   </p>
                 </div>
               </div>
-              <button onClick={() => openDetail(team)}
-                className="w-full px-4 py-2 bg-green-500 hover:bg-green-600 text-white rounded-lg text-sm font-medium transition-colors">
-                Ver equipo
-              </button>
+              <div className="flex gap-2">
+                <button onClick={() => openDetail(team)}
+                  className="flex-1 px-4 py-2 bg-green-500 hover:bg-green-600 text-white rounded-lg text-sm font-medium transition-colors">
+                  Ver equipo
+                </button>
+                {canManage && (
+                  <>
+                    <button onClick={() => openEdit(team)}
+                      className="p-2 border border-slate-300 hover:bg-slate-50 text-slate-600 rounded-lg transition-colors" title="Editar equipo">
+                      <Pencil className="w-4 h-4" />
+                    </button>
+                    <button onClick={() => handleDeleteTeam(team)} disabled={saving}
+                      className="p-2 border border-red-200 hover:bg-red-50 text-red-500 rounded-lg transition-colors disabled:opacity-40" title="Eliminar equipo">
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  </>
+                )}
+              </div>
             </div>
           ))}
         </div>

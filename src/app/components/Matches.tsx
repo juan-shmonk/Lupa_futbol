@@ -224,9 +224,14 @@ export function Matches({ onNavigate }: MatchesProps) {
   const handleScheduleMatch = async (e: React.FormEvent) => {
     e.preventDefault();
     setSchedSaving(true);
+    // Convert local datetime-local value to ISO string so Supabase recibe la hora correcta.
+    // Sin esto, "2026-04-19T14:05" se guarda como UTC y se muestra 5h antes en Cancún (UTC-5).
+    const scheduledAtISO = scheduleForm.scheduled_at
+      ? new Date(scheduleForm.scheduled_at).toISOString()
+      : null;
     const { data, error } = await supabase
       .from('matches')
-      .insert({ ...scheduleForm, league_id: scheduleForm.league_id || null, referee_id: scheduleForm.referee_id || null, status: 'scheduled' })
+      .insert({ ...scheduleForm, scheduled_at: scheduledAtISO, league_id: scheduleForm.league_id || null, referee_id: scheduleForm.referee_id || null, status: 'scheduled' })
       .select().single();
     if (!error && data) {
       await logAudit('schedule_match', data.id);
