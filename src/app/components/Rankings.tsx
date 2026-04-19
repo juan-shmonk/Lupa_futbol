@@ -51,7 +51,7 @@ export function Rankings() {
   }, [tab]);
 
   const loadTab = async (t: Tab) => {
-    if (loaded.has(t)) return;
+    if (loaded.has(t) && t !== 'referees') return;
     setLoading(true);
     if (t === 'players') await fetchScorers();
     if (t === 'referees') await fetchRefereeRankings();
@@ -100,15 +100,28 @@ export function Rankings() {
   };
 
   const fetchRefereeRankings = async () => {
-    const { data: refs } = await supabase.from('referees').select('id, profile:profiles(id, full_name)');
-    if (!refs) { setRefereeRanks([]); return; }
+    // Fetch referee rows
+    const { data: refs } = await supabase.from('referees').select('id, profile_id');
+    if (!refs || refs.length === 0) { setRefereeRanks([]); return; }
+
+    // Fetch profiles separately
+    const profileIds = refs.map(r => r.profile_id).filter(Boolean);
+    const { data: profiles } = await supabase.from('profiles').select('id, full_name').in('id', profileIds);
+    const profileMap: Record<string, string> = {};
+    (profiles || []).forEach(p => { profileMap[p.id] = p.full_name; });
 
     const enriched = await Promise.all(refs.map(async r => {
       const { data: ratings } = await supabase.from('referee_ratings').select('score').eq('referee_id', r.id);
       const { count } = await supabase.from('matches').select('id', { count: 'exact', head: true }).eq('referee_id', r.id).eq('status', 'validated');
-      const scores = (ratings || []).map(x => x.score);
-      const avg = scores.length > 0 ? Math.round((scores.reduce((a, b) => a + b, 0) / scores.length) * 10) / 10 : 0;
-      return { referee_id: r.id, full_name: (r.profile as any)?.full_name || '—', total_matches: count ?? 0, avg_score: avg, total_ratings: scores.length } as RefereeRanking;
+      const scores = (ratings || []).map((x: any) => x.score);
+      const avg = scores.length > 0 ? Math.round((scores.reduce((a: number, b: number) => a + b, 0) / scores.length) * 10) / 10 : 0;
+      return {
+        referee_id: r.id,
+        full_name: profileMap[r.profile_id] || '—',
+        total_matches: count ?? 0,
+        avg_score: avg,
+        total_ratings: scores.length,
+      } as RefereeRanking;
     }));
 
     setRefereeRanks(enriched.filter(r => r.total_ratings > 0).sort((a, b) => b.avg_score - a.avg_score));
