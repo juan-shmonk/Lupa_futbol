@@ -36,7 +36,6 @@ const menuByRole: Record<string, { id: string; label: string; icon: any }[]> = {
     { id: 'settings', label: 'Configuración', icon: Settings },
   ],
   jugador: [
-    { id: 'dashboard', label: 'Dashboard', icon: Home },
     { id: 'players', label: 'Mi Perfil', icon: Users },
     { id: 'matches', label: 'Partidos', icon: Calendar },
     { id: 'rankings', label: 'Rankings', icon: BarChart3 },

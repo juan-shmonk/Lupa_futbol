@@ -15,7 +15,7 @@ export default function App() {
   const [session, setSession] = useState<any>(null);
   const [profile, setProfile] = useState<any>(null);
   const [loading, setLoading] = useState(true);
-  const [currentView, setCurrentView] = useState('dashboard');
+  const [currentView, setCurrentView] = useState<string>('dashboard');
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
@@ -40,6 +40,7 @@ export default function App() {
       .eq('id', userId)
       .single();
     setProfile(data);
+    if (data?.role === 'jugador') setCurrentView('players');
     setLoading(false);
   };
 
