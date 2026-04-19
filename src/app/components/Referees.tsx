@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Trophy, Star, CheckCircle, XCircle, ArrowLeft, Eye } from 'lucide-react';
+import { Trophy, Star, CheckCircle, XCircle, ArrowLeft, Eye, Calendar, MapPin, UserCheck } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
 
 interface Profile { id: string; full_name: string; email: string; city: string | null; }
@@ -25,7 +25,7 @@ const stars = (score: number) => {
 };
 
 export function Referees() {
-  const [view, setView] = useState<'list' | 'profile' | 'pending'>('list');
+  const [view, setView] = useState<'list' | 'profile' | 'pending' | 'assign'>('list');
   const [referees, setReferees] = useState<RefereeRow[]>([]);
   const [pendingUsers, setPendingUsers] = useState<Profile[]>([]);
   const [selected, setSelected] = useState<RefereeRow | null>(null);
@@ -41,6 +41,11 @@ export function Referees() {
   const [canRateSelected, setCanRateSelected] = useState(false);
   const [alreadyRated, setAlreadyRated] = useState(false);
   const [ratingSaving, setRatingSaving] = useState(false);
+
+  // Assign match
+  const [scheduledMatches, setScheduledMatches] = useState<any[]>([]);
+  const [assignLoading, setAssignLoading] = useState(false);
+  const [assignSaving, setAssignSaving] = useState<string | null>(null);
 
   useEffect(() => { loadInit(); }, []);
 
@@ -181,7 +186,132 @@ export function Referees() {
     setRatingSaving(false);
   };
 
-  const canManageApprovals = userRole === 'admin_plataforma';
+  const openAssign = async (ref: RefereeRow) => {
+    setSelected(ref);
+    setAssignLoading(true);
+    setView('assign');
+    const { data, error } = await supabase
+      .from('matches')
+      .select('id, scheduled_at, field_name, home_team:teams!home_team_id(id, name), away_team:teams!away_team_id(id, name), referee:referees!referee_id(id, profile:profiles(full_name))')
+      .eq('status', 'scheduled')
+      .order('scheduled_at', { ascending: true });
+    if (error) console.error('fetchScheduledMatches error:', error);
+    setScheduledMatches(data || []);
+    setAssignLoading(false);
+  };
+
+  const handleAssignMatch = async (matchId: string) => {
+    if (!selected) return;
+    setAssignSaving(matchId);
+    const { error } = await supabase
+      .from('matches')
+      .update({ referee_id: selected.id })
+      .eq('id', matchId);
+    if (error) {
+      alert('Error al asignar: ' + error.message);
+    } else {
+      setScheduledMatches(prev =>
+        prev.map(m => m.id === matchId ? { ...m, referee: { id: selected.id, profile: { full_name: selected.profile?.full_name } } } : m)
+      );
+    }
+    setAssignSaving(null);
+  };
+
+  const fmtDate = (dt: string | null) => {
+    if (!dt) return '—';
+    return new Date(dt).toLocaleDateString('es-MX', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+  };
+
+  const canManageApprovals = userRole === 'admin_plataforma' || userRole === 'director_liga';
+
+  // ── ASSIGN MATCH ──
+  if (view === 'assign' && selected) {
+    return (
+      <div className="p-4 lg:p-6 max-w-3xl mx-auto space-y-6">
+        <button onClick={() => setView('list')} className="flex items-center gap-2 text-slate-600 hover:text-slate-900">
+          <ArrowLeft className="w-4 h-4" /> Volver a árbitros
+        </button>
+
+        <div className="bg-gradient-to-r from-blue-500 to-blue-600 rounded-xl p-5 text-white flex items-center gap-4">
+          <div className="w-14 h-14 bg-white/20 rounded-full flex items-center justify-center text-xl font-bold">
+            {selected.profile?.full_name?.split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase()}
+          </div>
+          <div>
+            <p className="text-blue-100 text-sm">Asignar partido a</p>
+            <h2 className="text-xl font-bold">{selected.profile?.full_name}</h2>
+            {selected.city && <p className="text-blue-100 text-sm">{selected.city}</p>}
+          </div>
+        </div>
+
+        <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
+          <div className="px-5 py-4 border-b border-slate-100 bg-slate-50">
+            <h3 className="font-semibold text-slate-900">Partidos programados disponibles</h3>
+            <p className="text-sm text-slate-500 mt-0.5">Selecciona el partido al que deseas asignar este árbitro</p>
+          </div>
+
+          {assignLoading ? (
+            <div className="py-12 text-center text-slate-400">Cargando partidos...</div>
+          ) : scheduledMatches.length === 0 ? (
+            <div className="py-12 text-center">
+              <Calendar className="w-10 h-10 text-slate-300 mx-auto mb-3" />
+              <p className="text-slate-500 font-medium">No hay partidos programados</p>
+              <p className="text-slate-400 text-sm mt-1">Programa partidos desde el módulo de Partidos</p>
+            </div>
+          ) : (
+            <div className="divide-y divide-slate-100">
+              {scheduledMatches.map(match => {
+                const alreadyThis = match.referee?.id === selected.id;
+                const hasOther = match.referee && !alreadyThis;
+                return (
+                  <div key={match.id} className={`p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4 ${alreadyThis ? 'bg-blue-50' : ''}`}>
+                    <div className="flex-1">
+                      <div className="flex items-center gap-2 mb-1">
+                        <p className="font-semibold text-slate-900">
+                          {(match.home_team as any)?.name ?? '—'} vs {(match.away_team as any)?.name ?? '—'}
+                        </p>
+                        {alreadyThis && (
+                          <span className="px-2 py-0.5 bg-blue-100 text-blue-700 rounded-full text-xs font-medium">Asignado</span>
+                        )}
+                      </div>
+                      <div className="flex flex-wrap gap-3 text-xs text-slate-500">
+                        <span className="flex items-center gap-1">
+                          <Calendar className="w-3.5 h-3.5" />{fmtDate(match.scheduled_at)}
+                        </span>
+                        {match.field_name && (
+                          <span className="flex items-center gap-1">
+                            <MapPin className="w-3.5 h-3.5" />{match.field_name}
+                          </span>
+                        )}
+                      </div>
+                      {hasOther && (
+                        <p className="text-xs text-amber-600 mt-1">
+                          Árbitro actual: {(match.referee as any)?.profile?.full_name}
+                        </p>
+                      )}
+                    </div>
+                    <button
+                      onClick={() => handleAssignMatch(match.id)}
+                      disabled={assignSaving === match.id || alreadyThis}
+                      className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors whitespace-nowrap ${
+                        alreadyThis
+                          ? 'bg-blue-100 text-blue-700 cursor-default'
+                          : hasOther
+                          ? 'bg-amber-500 hover:bg-amber-600 text-white'
+                          : 'bg-green-500 hover:bg-green-600 text-white'
+                      } disabled:opacity-50`}
+                    >
+                      <UserCheck className="w-4 h-4" />
+                      {assignSaving === match.id ? 'Asignando...' : alreadyThis ? 'Ya asignado' : hasOther ? 'Reasignar' : 'Asignar'}
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
 
   // ── PENDING APPROVALS ──
   if (view === 'pending') {
@@ -423,7 +553,7 @@ export function Referees() {
                   <th className="px-6 py-3 text-center text-xs text-slate-500 uppercase tracking-wide">Partidos</th>
                   <th className="px-6 py-3 text-center text-xs text-slate-500 uppercase tracking-wide">Calificación</th>
                   <th className="px-6 py-3 text-center text-xs text-slate-500 uppercase tracking-wide">Reseñas</th>
-                  <th className="px-6 py-3 text-center text-xs text-slate-500 uppercase tracking-wide">Acción</th>
+                  <th className="px-6 py-3 text-center text-xs text-slate-500 uppercase tracking-wide">Acciones</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
@@ -451,10 +581,18 @@ export function Referees() {
                     </td>
                     <td className="px-6 py-4 text-center text-slate-600">{ref.total_ratings}</td>
                     <td className="px-6 py-4 text-center">
-                      <button onClick={() => openProfile(ref)}
-                        className="flex items-center gap-1 px-4 py-1.5 bg-blue-500 hover:bg-blue-600 text-white rounded-lg text-sm transition-colors mx-auto">
-                        <Eye className="w-3.5 h-3.5" /> Ver Perfil
-                      </button>
+                      <div className="flex items-center justify-center gap-2">
+                        <button onClick={() => openProfile(ref)}
+                          className="flex items-center gap-1 px-3 py-1.5 bg-blue-500 hover:bg-blue-600 text-white rounded-lg text-sm transition-colors">
+                          <Eye className="w-3.5 h-3.5" /> Ver
+                        </button>
+                        {canManageApprovals && (
+                          <button onClick={() => openAssign(ref)}
+                            className="flex items-center gap-1 px-3 py-1.5 bg-green-500 hover:bg-green-600 text-white rounded-lg text-sm transition-colors">
+                            <UserCheck className="w-3.5 h-3.5" /> Asignar
+                          </button>
+                        )}
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -491,10 +629,18 @@ export function Referees() {
                     <p className="font-bold text-slate-900">{ref.total_ratings}</p>
                   </div>
                 </div>
-                <button onClick={() => openProfile(ref)}
-                  className="w-full px-4 py-2 bg-blue-500 hover:bg-blue-600 text-white rounded-lg text-sm font-medium transition-colors">
-                  Ver Perfil Completo
-                </button>
+                <div className="flex gap-2">
+                  <button onClick={() => openProfile(ref)}
+                    className="flex-1 px-4 py-2 bg-blue-500 hover:bg-blue-600 text-white rounded-lg text-sm font-medium transition-colors">
+                    Ver Perfil
+                  </button>
+                  {canManageApprovals && (
+                    <button onClick={() => openAssign(ref)}
+                      className="flex-1 flex items-center justify-center gap-1 px-4 py-2 bg-green-500 hover:bg-green-600 text-white rounded-lg text-sm font-medium transition-colors">
+                      <UserCheck className="w-4 h-4" /> Asignar
+                    </button>
+                  )}
+                </div>
               </div>
             ))}
           </div>
