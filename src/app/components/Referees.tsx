@@ -131,12 +131,18 @@ export function Referees() {
 
   const handleApprove = async (userId: string) => {
     const { error } = await supabase.from('profiles').update({ status: 'active' }).eq('id', userId);
-    if (!error) {
-      try { await supabase.from('audit_logs').insert({ user_id: currentProfile?.id, action: 'approve_referee', table_name: 'profiles', record_id: userId }); } catch (_) {}
-      await fetchPendingUsers();
-    } else {
-      alert('Error: ' + error.message);
+    if (error) { alert('Error al aprobar: ' + error.message); return; }
+
+    // Crear fila en referees si no existe
+    const { data: existing } = await supabase.from('referees').select('id').eq('profile_id', userId).maybeSingle();
+    if (!existing) {
+      const { error: refErr } = await supabase.from('referees').insert({ profile_id: userId, approved_at: new Date().toISOString() });
+      if (refErr) alert('Perfil aprobado pero error al crear registro de árbitro: ' + refErr.message);
     }
+
+    try { await supabase.from('audit_logs').insert({ user_id: currentProfile?.id, action: 'approve_referee', table_name: 'profiles', record_id: userId }); } catch (_) {}
+    await fetchPendingUsers();
+    await fetchReferees();
   };
 
   const handleReject = async (userId: string) => {
