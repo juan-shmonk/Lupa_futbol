@@ -234,13 +234,36 @@ export function Referees() {
     setSelected(ref);
     setAssignLoading(true);
     setView('assign');
-    const { data, error } = await supabase
+
+    const { data: rawMatches, error } = await supabase
       .from('matches')
-      .select('id, scheduled_at, field_name, home_team:teams!home_team_id(id, name), away_team:teams!away_team_id(id, name), referee:referees!referee_id(id, profile:profiles(full_name))')
+      .select('id, scheduled_at, field_name, home_team_id, away_team_id, referee_id')
       .eq('status', 'scheduled')
       .order('scheduled_at', { ascending: true });
-    if (error) console.error('fetchScheduledMatches error:', error);
-    setScheduledMatches(data || []);
+
+    if (error) { console.error('openAssign error:', error); setScheduledMatches([]); setAssignLoading(false); return; }
+    if (!rawMatches || rawMatches.length === 0) { setScheduledMatches([]); setAssignLoading(false); return; }
+
+    const teamIds = [...new Set([...rawMatches.map(m => m.home_team_id), ...rawMatches.map(m => m.away_team_id)].filter(Boolean))];
+    const refIds = [...new Set(rawMatches.map(m => m.referee_id).filter(Boolean))];
+
+    const [{ data: teamsData }, { data: refData }] = await Promise.all([
+      teamIds.length > 0 ? supabase.from('teams').select('id, name').in('id', teamIds) : Promise.resolve({ data: [] }),
+      refIds.length > 0 ? supabase.from('referees').select('id, profile:profiles(full_name)').in('id', refIds) : Promise.resolve({ data: [] }),
+    ]);
+
+    const teamMap: Record<string, any> = {};
+    (teamsData || []).forEach((t: any) => { teamMap[t.id] = t; });
+    const refMap: Record<string, any> = {};
+    (refData || []).forEach((r: any) => { refMap[r.id] = r; });
+
+    setScheduledMatches(rawMatches.map(m => ({
+      ...m,
+      home_team: m.home_team_id ? teamMap[m.home_team_id] ?? null : null,
+      away_team: m.away_team_id ? teamMap[m.away_team_id] ?? null : null,
+      referee: m.referee_id ? refMap[m.referee_id] ?? null : null,
+    })));
+
     setAssignLoading(false);
   };
 
