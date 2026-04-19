@@ -5,6 +5,7 @@ import {
   TrendingUp, Eye, Award, CheckCircle, ChevronRight,
   Facebook, Instagram, Twitter
 } from 'lucide-react';
+import TodayMatchesBoard from './TodayMatchesBoard';
 
 export default function LandingPage() {
   const navigate = useNavigate();
@@ -39,6 +40,7 @@ export default function LandingPage() {
                 { label: 'Inicio', id: 'inicio' },
                 { label: 'Cómo funciona', id: 'como-funciona' },
                 { label: 'Rankings', id: 'rankings' },
+                { label: 'Partidos de Hoy', id: 'partidos-hoy' },
                 { label: 'Contacto', id: 'footer' },
               ].map(l => (
                 <button key={l.id} onClick={() => scrollTo(l.id)}
@@ -74,6 +76,7 @@ export default function LandingPage() {
               { label: 'Inicio', id: 'inicio' },
               { label: 'Cómo funciona', id: 'como-funciona' },
               { label: 'Rankings', id: 'rankings' },
+              { label: 'Partidos de Hoy', id: 'partidos-hoy' },
               { label: 'Contacto', id: 'footer' },
             ].map(l => (
               <button key={l.id} onClick={() => scrollTo(l.id)}
@@ -399,6 +402,9 @@ export default function LandingPage() {
         </div>
       </section>
 
+      {/* ── TABLERO PARTIDOS DE HOY ── */}
+      <TodayMatchesBoard onEnterApp={toApp} />
+
       {/* ── BENEFICIOS POR ROL ── */}
       <section className="py-20 bg-slate-50">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
@@ -521,6 +527,7 @@ export default function LandingPage() {
                   { label: 'Inicio', id: 'inicio' },
                   { label: 'Cómo funciona', id: 'como-funciona' },
                   { label: 'Rankings', id: 'rankings' },
+                  { label: 'Partidos de Hoy', id: 'partidos-hoy' },
                   { label: 'Iniciar sesión', action: toApp },
                 ].map((l, i) => (
                   <li key={i}>
