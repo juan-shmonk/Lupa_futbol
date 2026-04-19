@@ -53,20 +53,52 @@ export function Teams() {
     if (!user) return;
     const { data: profile } = await supabase.from('profiles').select('*').eq('id', user.id).single();
     setCurrentProfile(profile);
-    setUserRole(profile?.role || '');
-    await Promise.all([fetchTeams(), fetchLeagues()]);
+    const role = profile?.role || '';
+    setUserRole(role);
+
+    // Para jugadores, obtener TODOS sus equipos (puede ser más de uno)
+    let playerTids: string[] | null = null;
+    if (role === 'jugador') {
+      const { data: pls } = await supabase
+        .from('players')
+        .select('team_id')
+        .eq('profile_id', user.id)
+        .not('team_id', 'is', null);
+      playerTids = (pls || []).map(p => p.team_id).filter(Boolean) as string[];
+    }
+
+    await Promise.all([fetchTeams(playerTids), fetchLeagues()]);
   };
 
-  const fetchTeams = async () => {
+  // playerTids: null = no jugador (muestra todos). Array vacío = jugador sin equipo.
+  const fetchTeams = async (playerTids: string[] | null = null) => {
     setLoading(true);
-    const { data, error } = await supabase
+
+    if (playerTids !== null && playerTids.length === 0) {
+      setTeams([]);
+      setLoading(false);
+      return;
+    }
+
+    let baseQuery = supabase
       .from('teams')
       .select('*, league:leagues(id, name), manager:profiles!teams_manager_id_fkey(id, full_name, email)')
       .order('name');
 
+    let fallbackQuery = supabase
+      .from('teams')
+      .select('*, league:leagues(id, name)')
+      .order('name');
+
+    if (playerTids !== null) {
+      baseQuery = baseQuery.in('id', playerTids) as any;
+      fallbackQuery = fallbackQuery.in('id', playerTids) as any;
+    }
+
+    const { data, error } = await baseQuery;
+
     if (error) {
-      // fallback without FK hint
-      const { data: d2 } = await supabase.from('teams').select('*, league:leagues(id, name)').order('name');
+      const { data: d2 } = await fallbackQuery;
       const rows = d2 || [];
       const withCount = await Promise.all(rows.map(async t => {
         const { count } = await supabase.from('players').select('id', { count: 'exact', head: true }).eq('team_id', t.id);
@@ -137,7 +169,7 @@ export function Teams() {
     if (!err && data) {
       try { await supabase.from('audit_logs').insert({ user_id: currentProfile?.id, action: 'create_team', table_name: 'teams', record_id: data.id, new_value: form.name }); } catch (_) {}
       setForm({ name: '', league_id: '', city: '', status: 'active' });
-      await fetchTeams();
+      await fetchTeams(null);
       setView('list');
     } else {
       setError(err?.message || 'Error al crear equipo');
@@ -163,7 +195,7 @@ export function Teams() {
       .eq('id', editingTeam.id);
     if (!err) {
       try { await supabase.from('audit_logs').insert({ user_id: currentProfile?.id, action: 'edit_team', table_name: 'teams', record_id: editingTeam.id, new_value: editForm.name }); } catch (_) {}
-      await fetchTeams();
+      await fetchTeams(null);
       setEditingTeam(null);
       setView('list');
     } else {
@@ -197,7 +229,7 @@ export function Teams() {
     if (!err) {
       try { await supabase.from('audit_logs').insert({ user_id: currentProfile?.id, action: 'delete_team', table_name: 'teams', record_id: team.id, new_value: team.name }); } catch (_) {}
       if (view === 'detail') setView('list');
-      await fetchTeams();
+      await fetchTeams(null);
     } else {
       alert('Error al eliminar: ' + err.message);
     }
@@ -521,8 +553,11 @@ export function Teams() {
           <div className="w-16 h-16 bg-slate-100 rounded-full flex items-center justify-center mx-auto mb-4">
             <Shield className="w-8 h-8 text-slate-400" />
           </div>
-          <p className="text-slate-500 font-medium">No hay equipos registrados</p>
+          <p className="text-slate-500 font-medium">
+            {userRole === 'jugador' ? 'No perteneces a ningún equipo aún' : 'No hay equipos registrados'}
+          </p>
           {canManage && <p className="text-slate-400 text-sm mt-1">Crea el primer equipo con el botón de arriba</p>}
+          {userRole === 'jugador' && <p className="text-slate-400 text-sm mt-1">Pide a tu director de liga que te asigne a un equipo</p>}
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">

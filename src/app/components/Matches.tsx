@@ -89,7 +89,8 @@ export function Matches({ onNavigate }: MatchesProps) {
 
   useEffect(() => { loadInit(); }, []);
 
-  const [playerTeamId, setPlayerTeamId] = useState<string | null>(null);
+  // IDs de todos los equipos del jugador (puede ser más de uno)
+  const [playerTeamIds, setPlayerTeamIds] = useState<string[]>([]);
 
   const loadInit = async () => {
     const { data: { user } } = await supabase.auth.getUser();
@@ -99,25 +100,46 @@ export function Matches({ onNavigate }: MatchesProps) {
     const role = prof?.role || '';
     setUserRole(role);
 
-    let teamId: string | null = null;
     if (role === 'arbitro') {
       const { data: ref } = await supabase.from('referees').select('id').eq('profile_id', user.id).single();
       setRefereeProfileId(ref?.id || null);
     }
+
     if (role === 'jugador') {
-      const { data: pl } = await supabase.from('players').select('team_id').eq('profile_id', user.id).maybeSingle();
-      teamId = pl?.team_id || null;
-      setPlayerTeamId(teamId);
+      // Traer TODOS los equipos del jugador (puede pertenecer a más de uno)
+      const { data: pls } = await supabase
+        .from('players')
+        .select('team_id')
+        .eq('profile_id', user.id)
+        .not('team_id', 'is', null);
+      const ids = (pls || []).map(p => p.team_id).filter(Boolean) as string[];
+      setPlayerTeamIds(ids);
+      await fetchMatches(ids);
+    } else {
+      await fetchMatches(null);
     }
-    await fetchMatches(teamId);
   };
 
-  const fetchMatches = async (teamId?: string | null) => {
+  // playerTeamIds: array de equipos del jugador. null = no es jugador (muestra todo).
+  // Array vacío = jugador sin equipo (muestra nada).
+  const fetchMatches = async (playerTids: string[] | null) => {
     setLoading(true);
 
-    // Step 1: fetch raw matches (filtered by team for jugadores)
+    // Jugador sin equipo asignado: no debe ver ningún partido
+    if (playerTids !== null && playerTids.length === 0) {
+      setMatches([]);
+      setLoading(false);
+      return;
+    }
+
+    // Step 1: fetch raw matches
     let query = supabase.from('matches').select('*').order('scheduled_at', { ascending: false });
-    if (teamId) query = query.or(`home_team_id.eq.${teamId},away_team_id.eq.${teamId}`);
+
+    if (playerTids !== null && playerTids.length > 0) {
+      // Filtrar solo partidos donde participa alguno de sus equipos
+      const orParts = playerTids.flatMap(id => [`home_team_id.eq.${id}`, `away_team_id.eq.${id}`]);
+      query = query.or(orParts.join(','));
+    }
 
     const { data: rawMatches, error: matchErr } = await query;
 
@@ -235,7 +257,7 @@ export function Matches({ onNavigate }: MatchesProps) {
       .select().single();
     if (!error && data) {
       await logAudit('schedule_match', data.id);
-      await fetchMatches();
+      await fetchMatches(userRole === 'jugador' ? playerTeamIds : null);
       setView('list');
     } else {
       alert('Error al programar partido: ' + error?.message);
@@ -248,7 +270,7 @@ export function Matches({ onNavigate }: MatchesProps) {
     const { error } = await supabase.from('matches').update({ status: 'in_progress' }).eq('id', selected.id);
     if (!error) {
       setSelected({ ...selected, status: 'in_progress' });
-      await fetchMatches();
+      await fetchMatches(userRole === 'jugador' ? playerTeamIds : null);
     }
   };
 
@@ -301,7 +323,7 @@ export function Matches({ onNavigate }: MatchesProps) {
         closed_at: new Date().toISOString(),
       }, { onConflict: 'match_id' });
       await logAudit('close_match_report', selected.id);
-      await fetchMatches();
+      await fetchMatches(userRole === 'jugador' ? playerTeamIds : null);
       setView('list');
     } else {
       alert('Error al finalizar: ' + error.message);
@@ -315,7 +337,7 @@ export function Matches({ onNavigate }: MatchesProps) {
     const { error } = await supabase.from('matches').update({ status: 'validated', validated_by: currentProfile?.id, validated_at: new Date().toISOString() }).eq('id', selected.id);
     if (!error) {
       await logAudit('validate_match', selected.id);
-      await fetchMatches();
+      await fetchMatches(userRole === 'jugador' ? playerTeamIds : null);
       setView('list');
     } else {
       alert('Error: ' + error.message);
@@ -329,7 +351,7 @@ export function Matches({ onNavigate }: MatchesProps) {
     const { error } = await supabase.from('matches').update({ status: 'rejected', rejection_reason: rejectReason, validated_by: currentProfile?.id, validated_at: new Date().toISOString() }).eq('id', selected.id);
     if (!error) {
       await logAudit('reject_match', selected.id, { new_value: rejectReason });
-      await fetchMatches();
+      await fetchMatches(userRole === 'jugador' ? playerTeamIds : null);
       setView('list');
     } else {
       alert('Error: ' + error.message);
@@ -787,7 +809,14 @@ export function Matches({ onNavigate }: MatchesProps) {
       ) : filteredMatches.length === 0 ? (
         <div className="text-center py-12">
           <Calendar className="w-12 h-12 text-slate-300 mx-auto mb-3" />
-          <p className="text-slate-500 font-medium">No hay partidos en esta categoría</p>
+          <p className="text-slate-500 font-medium">
+            {userRole === 'jugador' && playerTeamIds.length === 0
+              ? 'No perteneces a ningún equipo aún'
+              : 'No hay partidos en esta categoría'}
+          </p>
+          {userRole === 'jugador' && playerTeamIds.length === 0 && (
+            <p className="text-slate-400 text-sm mt-1">Pide a tu director de liga que te asigne a un equipo</p>
+          )}
         </div>
       ) : (
         <div className="space-y-4">
