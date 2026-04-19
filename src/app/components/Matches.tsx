@@ -81,6 +81,12 @@ export function Matches({ onNavigate }: MatchesProps) {
   const [rejectReason, setRejectReason] = useState('');
   const [validSaving, setValidSaving] = useState(false);
 
+  const logAudit = async (action: string, recordId: string, extra?: Record<string, string>) => {
+    try {
+      await supabase.from('audit_logs').insert({ user_id: currentProfile?.id, action, table_name: 'matches', record_id: recordId, ...extra });
+    } catch (_) {}
+  };
+
   useEffect(() => { loadInit(); }, []);
 
   const loadInit = async () => {
@@ -99,11 +105,65 @@ export function Matches({ onNavigate }: MatchesProps) {
 
   const fetchMatches = async () => {
     setLoading(true);
-    const { data } = await supabase
+
+    // Step 1: fetch raw matches
+    const { data: rawMatches, error: matchErr } = await supabase
       .from('matches')
-      .select(`*, home_team:teams!matches_home_team_id_fkey(id, name), away_team:teams!matches_away_team_id_fkey(id, name), referee:referees!matches_referee_id_fkey(id, profile:profiles(id, full_name)), league:leagues(id, name)`)
+      .select('*')
       .order('scheduled_at', { ascending: false });
-    setMatches((data as Match[]) || []);
+
+    if (matchErr) {
+      console.error('matches base error:', matchErr);
+      setMatches([]);
+      setLoading(false);
+      return;
+    }
+
+    if (!rawMatches || rawMatches.length === 0) {
+      setMatches([]);
+      setLoading(false);
+      return;
+    }
+
+    // Step 2: enrich with related data
+    const teamIds = [...new Set([
+      ...rawMatches.map(m => m.home_team_id),
+      ...rawMatches.map(m => m.away_team_id),
+    ].filter(Boolean))];
+
+    const refereeIds = [...new Set(rawMatches.map(m => m.referee_id).filter(Boolean))];
+    const leagueIds = [...new Set(rawMatches.map(m => m.league_id).filter(Boolean))];
+
+    const [{ data: teamsData }, { data: refData }, { data: leagueData }] = await Promise.all([
+      teamIds.length > 0
+        ? supabase.from('teams').select('id, name').in('id', teamIds)
+        : Promise.resolve({ data: [] }),
+      refereeIds.length > 0
+        ? supabase.from('referees').select('id, profile:profiles(id, full_name)').in('id', refereeIds)
+        : Promise.resolve({ data: [] }),
+      leagueIds.length > 0
+        ? supabase.from('leagues').select('id, name').in('id', leagueIds)
+        : Promise.resolve({ data: [] }),
+    ]);
+
+    const teamMap: Record<string, Team> = {};
+    (teamsData || []).forEach((t: Team) => { teamMap[t.id] = t; });
+
+    const refMap: Record<string, Referee> = {};
+    (refData || []).forEach((r: any) => { refMap[r.id] = r; });
+
+    const leagueMap: Record<string, { id: string; name: string }> = {};
+    (leagueData || []).forEach((l: any) => { leagueMap[l.id] = l; });
+
+    const enriched: Match[] = rawMatches.map(m => ({
+      ...m,
+      home_team: m.home_team_id ? teamMap[m.home_team_id] ?? null : null,
+      away_team: m.away_team_id ? teamMap[m.away_team_id] ?? null : null,
+      referee: m.referee_id ? refMap[m.referee_id] ?? null : null,
+      league: m.league_id ? leagueMap[m.league_id] ?? null : null,
+    }));
+
+    setMatches(enriched);
     setLoading(false);
   };
 
@@ -160,7 +220,7 @@ export function Matches({ onNavigate }: MatchesProps) {
       .insert({ ...scheduleForm, league_id: scheduleForm.league_id || null, referee_id: scheduleForm.referee_id || null, status: 'scheduled' })
       .select().single();
     if (!error && data) {
-      await supabase.from('audit_logs').insert({ user_id: currentProfile?.id, action: 'schedule_match', table_name: 'matches', record_id: data.id }).catch(() => {});
+      await logAudit('schedule_match', data.id);
       await fetchMatches();
       setView('list');
     } else {
@@ -226,7 +286,7 @@ export function Matches({ onNavigate }: MatchesProps) {
         is_closed: true,
         closed_at: new Date().toISOString(),
       }, { onConflict: 'match_id' });
-      await supabase.from('audit_logs').insert({ user_id: currentProfile?.id, action: 'close_match_report', table_name: 'matches', record_id: selected.id }).catch(() => {});
+      await logAudit('close_match_report', selected.id);
       await fetchMatches();
       setView('list');
     } else {
@@ -240,7 +300,7 @@ export function Matches({ onNavigate }: MatchesProps) {
     setValidSaving(true);
     const { error } = await supabase.from('matches').update({ status: 'validated', validated_by: currentProfile?.id, validated_at: new Date().toISOString() }).eq('id', selected.id);
     if (!error) {
-      await supabase.from('audit_logs').insert({ user_id: currentProfile?.id, action: 'validate_match', table_name: 'matches', record_id: selected.id }).catch(() => {});
+      await logAudit('validate_match', selected.id);
       await fetchMatches();
       setView('list');
     } else {
@@ -254,7 +314,7 @@ export function Matches({ onNavigate }: MatchesProps) {
     setValidSaving(true);
     const { error } = await supabase.from('matches').update({ status: 'rejected', rejection_reason: rejectReason, validated_by: currentProfile?.id, validated_at: new Date().toISOString() }).eq('id', selected.id);
     if (!error) {
-      await supabase.from('audit_logs').insert({ user_id: currentProfile?.id, action: 'reject_match', table_name: 'matches', record_id: selected.id, new_value: rejectReason }).catch(() => {});
+      await logAudit('reject_match', selected.id, { new_value: rejectReason });
       await fetchMatches();
       setView('list');
     } else {

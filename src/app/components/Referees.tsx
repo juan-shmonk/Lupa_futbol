@@ -132,7 +132,7 @@ export function Referees() {
   const handleApprove = async (userId: string) => {
     const { error } = await supabase.from('profiles').update({ status: 'active' }).eq('id', userId);
     if (!error) {
-      await supabase.from('audit_logs').insert({ user_id: currentProfile?.id, action: 'approve_referee', table_name: 'profiles', record_id: userId }).catch(() => {});
+      try { await supabase.from('audit_logs').insert({ user_id: currentProfile?.id, action: 'approve_referee', table_name: 'profiles', record_id: userId }); } catch (_) {}
       await fetchPendingUsers();
     } else {
       alert('Error: ' + error.message);
@@ -142,7 +142,7 @@ export function Referees() {
   const handleReject = async (userId: string) => {
     const { error } = await supabase.from('profiles').update({ status: 'suspended' }).eq('id', userId);
     if (!error) {
-      await supabase.from('audit_logs').insert({ user_id: currentProfile?.id, action: 'reject_referee', table_name: 'profiles', record_id: userId }).catch(() => {});
+      try { await supabase.from('audit_logs').insert({ user_id: currentProfile?.id, action: 'reject_referee', table_name: 'profiles', record_id: userId }); } catch (_) {}
       await fetchPendingUsers();
     } else {
       alert('Error: ' + error.message);

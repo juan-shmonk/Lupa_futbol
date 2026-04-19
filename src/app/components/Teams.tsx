@@ -133,7 +133,7 @@ export function Teams() {
       .insert({ name: form.name, league_id: form.league_id || null, manager_id: currentProfile?.id, city: form.city || null, status: form.status })
       .select().single();
     if (!err && data) {
-      await supabase.from('audit_logs').insert({ user_id: currentProfile?.id, action: 'create_team', table_name: 'teams', record_id: data.id, new_value: form.name }).catch(() => {});
+      try { await supabase.from('audit_logs').insert({ user_id: currentProfile?.id, action: 'create_team', table_name: 'teams', record_id: data.id, new_value: form.name }); } catch (_) {}
       setForm({ name: '', league_id: '', city: '', status: 'active' });
       await fetchTeams();
       setView('list');

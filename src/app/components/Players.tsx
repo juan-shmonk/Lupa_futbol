@@ -32,7 +32,7 @@ export function Players({ onNavigate }: { onNavigate: (view: string) => void }) 
 
   const fetchPlayers = async () => {
     setLoading(true);
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from('players')
       .select(`
         *,
@@ -40,6 +40,7 @@ export function Players({ onNavigate }: { onNavigate: (view: string) => void }) 
         team:teams(id, name)
       `)
       .order('created_at', { ascending: false });
+    if (error) console.error('fetchPlayers error:', error);
     setPlayers(data || []);
     setLoading(false);
   };

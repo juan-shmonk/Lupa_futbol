@@ -93,7 +93,7 @@ export function Settings() {
   const handleChangeStatus = async (userId: string, newStatus: string) => {
     const { error } = await supabase.from('profiles').update({ status: newStatus }).eq('id', userId);
     if (!error) {
-      await supabase.from('audit_logs').insert({ user_id: profile?.id, action: `set_status_${newStatus}`, table_name: 'profiles', record_id: userId }).catch(() => {});
+      try { await supabase.from('audit_logs').insert({ user_id: profile?.id, action: `set_status_${newStatus}`, table_name: 'profiles', record_id: userId }); } catch (_) {}
       setAllUsers(prev => prev.map(u => u.id === userId ? { ...u, status: newStatus } : u));
       setUserMsg(`Estado actualizado a "${STATUS_LABELS[newStatus]}"`);
       setTimeout(() => setUserMsg(''), 3000);
@@ -103,7 +103,7 @@ export function Settings() {
   const handleChangeRole = async (userId: string, newRole: string) => {
     const { error } = await supabase.from('profiles').update({ role: newRole }).eq('id', userId);
     if (!error) {
-      await supabase.from('audit_logs').insert({ user_id: profile?.id, action: 'change_role', table_name: 'profiles', record_id: userId, new_value: newRole }).catch(() => {});
+      try { await supabase.from('audit_logs').insert({ user_id: profile?.id, action: 'change_role', table_name: 'profiles', record_id: userId, new_value: newRole }); } catch (_) {}
       setAllUsers(prev => prev.map(u => u.id === userId ? { ...u, role: newRole } : u));
     }
   };
