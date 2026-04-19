@@ -102,7 +102,7 @@ export default function App() {
 
   const renderView = () => {
     switch (currentView) {
-      case 'dashboard': return <Dashboard />;
+      case 'dashboard': return <Dashboard onNavigate={setCurrentView} />;
       case 'players': return <Players onNavigate={setCurrentView} />;
       case 'teams': return <Teams />;
       case 'matches': return <Matches onNavigate={setCurrentView} />;

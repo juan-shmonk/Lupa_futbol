@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Users, Shield, Calendar, Trophy, Award, AlertCircle, Target } from 'lucide-react';
+import { Users, Shield, Calendar, Trophy, Award, AlertCircle, Target, ChevronRight } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, LineChart, Line } from 'recharts';
 import { supabase } from '../../lib/supabase';
 
@@ -11,13 +11,14 @@ interface Stats {
   pendingValidation: number;
 }
 
-export function Dashboard() {
+export function Dashboard({ onNavigate }: { onNavigate?: (view: string) => void }) {
   const [stats, setStats] = useState<Stats>({ players: 0, teams: 0, scheduledMatches: 0, finishedMatches: 0, pendingValidation: 0 });
   const [chartData, setChartData] = useState<{ month: string; partidos: number; goles: number }[]>([]);
   const [topScorers, setTopScorers] = useState<any[]>([]);
   const [topReferees, setTopReferees] = useState<any[]>([]);
   const [userRole, setUserRole] = useState('');
   const [loading, setLoading] = useState(true);
+  const [playerSnap, setPlayerSnap] = useState<{ name: string; team: string; position: string; goals: number; matches: number; yellow: number; red: number } | null>(null);
 
   useEffect(() => { loadDashboard(); }, []);
 
@@ -25,10 +26,34 @@ export function Dashboard() {
     setLoading(true);
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return;
-    const { data: prof } = await supabase.from('profiles').select('role').eq('id', user.id).single();
+    const { data: prof } = await supabase.from('profiles').select('*').eq('id', user.id).single();
     setUserRole(prof?.role || '');
+    if (prof?.role === 'jugador') {
+      await fetchPlayerSnap(user.id);
+    }
     await Promise.all([fetchStats(), fetchChartData(), fetchTopScorers(), fetchTopReferees()]);
     setLoading(false);
+  };
+
+  const fetchPlayerSnap = async (userId: string) => {
+    const { data: player } = await supabase
+      .from('players')
+      .select('id, position, team:teams(name), profile:profiles(full_name)')
+      .eq('profile_id', userId)
+      .maybeSingle();
+    if (!player) return;
+    const { data: events } = await supabase.from('match_events').select('event_type').eq('player_id', player.id);
+    const evs = events || [];
+    const { data: prof } = await supabase.from('profiles').select('full_name').eq('id', userId).single();
+    setPlayerSnap({
+      name: (prof?.full_name) || '',
+      team: (player.team as any)?.name || 'Sin equipo',
+      position: player.position || 'Sin posición',
+      goals: evs.filter(e => e.event_type === 'goal').length,
+      matches: 0,
+      yellow: evs.filter(e => e.event_type === 'yellow_card').length,
+      red: evs.filter(e => e.event_type === 'red_card').length,
+    });
   };
 
   const fetchStats = async () => {
@@ -134,6 +159,32 @@ export function Dashboard() {
 
   return (
     <div className="p-4 lg:p-6 space-y-6">
+
+      {/* Player personal banner */}
+      {userRole === 'jugador' && playerSnap && (
+        <div className="bg-gradient-to-r from-green-600 to-green-500 rounded-2xl p-6 text-white">
+          <p className="text-green-100 text-sm mb-1">Bienvenido de vuelta</p>
+          <h2 className="text-2xl font-bold mb-1">{playerSnap.name}</h2>
+          <p className="text-green-100 text-sm mb-4">{playerSnap.position} · {playerSnap.team}</p>
+          <div className="grid grid-cols-3 gap-4 mb-5">
+            {[
+              { label: 'Goles', value: playerSnap.goals, color: 'text-white' },
+              { label: 'T. Amarillas', value: playerSnap.yellow, color: 'text-amber-200' },
+              { label: 'T. Rojas', value: playerSnap.red, color: 'text-red-200' },
+            ].map((s, i) => (
+              <div key={i} className="bg-white/15 rounded-xl p-3 text-center">
+                <p className={`text-2xl font-bold ${s.color}`}>{s.value}</p>
+                <p className="text-green-100 text-xs mt-1">{s.label}</p>
+              </div>
+            ))}
+          </div>
+          <button onClick={() => onNavigate?.('players')}
+            className="flex items-center gap-2 bg-white text-green-700 font-semibold px-5 py-2.5 rounded-xl text-sm hover:bg-green-50 transition-colors">
+            Ver mi análisis completo <ChevronRight className="w-4 h-4" />
+          </button>
+        </div>
+      )}
+
       {/* Stats Cards */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
         {statCards.map((card, i) => {
