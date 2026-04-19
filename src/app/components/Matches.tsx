@@ -89,28 +89,37 @@ export function Matches({ onNavigate }: MatchesProps) {
 
   useEffect(() => { loadInit(); }, []);
 
+  const [playerTeamId, setPlayerTeamId] = useState<string | null>(null);
+
   const loadInit = async () => {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return;
     const { data: prof } = await supabase.from('profiles').select('*').eq('id', user.id).single();
     setCurrentProfile(prof);
-    setUserRole(prof?.role || '');
-    // get referee record if user is arbitro
-    if (prof?.role === 'arbitro') {
+    const role = prof?.role || '';
+    setUserRole(role);
+
+    let teamId: string | null = null;
+    if (role === 'arbitro') {
       const { data: ref } = await supabase.from('referees').select('id').eq('profile_id', user.id).single();
       setRefereeProfileId(ref?.id || null);
     }
-    await fetchMatches();
+    if (role === 'jugador') {
+      const { data: pl } = await supabase.from('players').select('team_id').eq('profile_id', user.id).maybeSingle();
+      teamId = pl?.team_id || null;
+      setPlayerTeamId(teamId);
+    }
+    await fetchMatches(teamId);
   };
 
-  const fetchMatches = async () => {
+  const fetchMatches = async (teamId?: string | null) => {
     setLoading(true);
 
-    // Step 1: fetch raw matches
-    const { data: rawMatches, error: matchErr } = await supabase
-      .from('matches')
-      .select('*')
-      .order('scheduled_at', { ascending: false });
+    // Step 1: fetch raw matches (filtered by team for jugadores)
+    let query = supabase.from('matches').select('*').order('scheduled_at', { ascending: false });
+    if (teamId) query = query.or(`home_team_id.eq.${teamId},away_team_id.eq.${teamId}`);
+
+    const { data: rawMatches, error: matchErr } = await query;
 
     if (matchErr) {
       console.error('matches base error:', matchErr);
@@ -323,7 +332,7 @@ export function Matches({ onNavigate }: MatchesProps) {
     setValidSaving(false);
   };
 
-  const isMyMatch = (m: Match) => m.referee?.profile?.id === currentProfile?.id || refereeProfileId === m.referee_id;
+  const isMyMatch = (m: Match) => userRole === 'arbitro' && (m.referee?.profile?.id === currentProfile?.id || refereeProfileId === m.referee_id);
   const canManage = userRole === 'admin_plataforma' || userRole === 'director_liga';
   const filteredMatches = matches.filter(m => {
     if (filter === 'all') return true;

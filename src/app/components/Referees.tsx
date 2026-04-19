@@ -152,28 +152,18 @@ export function Referees() {
       .limit(10);
     setRefereeMatches(matchesData || []);
 
-    // Check if current player can rate this referee
+    // Any registered jugador can rate any referee
     setCanRateSelected(false);
     setAlreadyRated(false);
-    if (myPlayer?.team_id) {
-      // Find validated match where ref was referee and player's team participated
-      const { data: eligible } = await supabase
-        .from('matches')
+    if (myPlayer && userRole === 'jugador') {
+      setCanRateSelected(true);
+      const { data: existing } = await supabase
+        .from('referee_ratings')
         .select('id')
         .eq('referee_id', ref.id)
-        .eq('status', 'validated')
-        .or(`home_team_id.eq.${myPlayer.team_id},away_team_id.eq.${myPlayer.team_id}`)
+        .eq('player_id', myPlayer.id)
         .limit(1);
-      if (eligible && eligible.length > 0) {
-        setCanRateSelected(true);
-        const { data: existing } = await supabase
-          .from('referee_ratings')
-          .select('id')
-          .eq('referee_id', ref.id)
-          .eq('player_id', myPlayer.id)
-          .limit(1);
-        setAlreadyRated(!!(existing && existing.length > 0));
-      }
+      setAlreadyRated(!!(existing && existing.length > 0));
     }
     setView('profile');
   };
@@ -208,15 +198,10 @@ export function Referees() {
     e.preventDefault();
     if (!selected || !myPlayer) return;
     setRatingSaving(true);
-    // Find a validated match to attach the rating
-    const { data: eligibleMatch } = await supabase
-      .from('matches').select('id').eq('referee_id', selected.id).eq('status', 'validated')
-      .or(`home_team_id.eq.${myPlayer.team_id},away_team_id.eq.${myPlayer.team_id}`).limit(1).single();
-
     const { error } = await supabase.from('referee_ratings').insert({
       referee_id: selected.id,
       player_id: myPlayer.id,
-      match_id: eligibleMatch?.id || null,
+      match_id: null,
       score: ratingForm.score,
       comment: ratingForm.comment || null,
     });
