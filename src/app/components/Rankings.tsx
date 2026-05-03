@@ -10,6 +10,7 @@ interface Scorer {
   position: string | null;
   goals: number;
   matches_played: number;
+  is_unlinked?: boolean;
 }
 
 interface RefereeRanking {
@@ -61,42 +62,89 @@ export function Rankings() {
   };
 
   const fetchScorers = async () => {
-    // Get all goal events from validated matches
+    // Todos los goles de partidos validados (incluye player_id null)
     const { data: events } = await supabase
       .from('match_events')
-      .select('player_id, match_id, matches!inner(status)')
+      .select('player_id, match_id, team_id, notes, matches!inner(status)')
       .eq('event_type', 'goal')
       .eq('matches.status', 'validated');
 
     if (!events || events.length === 0) { setScorers([]); return; }
 
-    // Count goals per player
-    const goalMap: Record<string, number> = {};
-    const matchMap: Record<string, Set<string>> = {};
+    // ── Caso A: jugadores con cuenta (player_id real) ──
+    const linkedGoalMap: Record<string, number> = {};
+    const linkedMatchMap: Record<string, Set<string>> = {};
+
+    // ── Caso B: jugadores sin cuenta (nombre en notes con #JUGADOR:...#) ──
+    // clave: "team_id::nombre_completo"
+    const unlinkedMap: Record<string, { goals: number; matches: Set<string>; team_id: string }> = {};
+
     events.forEach(ev => {
-      goalMap[ev.player_id] = (goalMap[ev.player_id] || 0) + 1;
-      if (!matchMap[ev.player_id]) matchMap[ev.player_id] = new Set();
-      matchMap[ev.player_id].add(ev.match_id);
+      if (ev.player_id) {
+        linkedGoalMap[ev.player_id] = (linkedGoalMap[ev.player_id] || 0) + 1;
+        if (!linkedMatchMap[ev.player_id]) linkedMatchMap[ev.player_id] = new Set();
+        linkedMatchMap[ev.player_id].add(ev.match_id);
+      } else {
+        // Intentar extraer nombre del jugador desde notes
+        const m = ev.notes?.match(/^#JUGADOR:(.+?)#/);
+        if (m && ev.team_id) {
+          const key = `${ev.team_id}::${m[1]}`;
+          if (!unlinkedMap[key]) unlinkedMap[key] = { goals: 0, matches: new Set(), team_id: ev.team_id };
+          unlinkedMap[key].goals++;
+          unlinkedMap[key].matches.add(ev.match_id);
+        }
+      }
     });
 
-    // Fetch player details
-    const playerIds = Object.keys(goalMap);
-    const { data: players } = await supabase
-      .from('players')
-      .select('id, profile_id, position, team_id, profile:profiles(id, full_name), team:teams(id, name)')
-      .in('id', playerIds);
+    // Buscar detalles de jugadores con cuenta
+    const linkedIds = Object.keys(linkedGoalMap);
+    const { data: players } = linkedIds.length > 0
+      ? await supabase.from('players').select('id, profile_id, position, team_id, profile:profiles(id, full_name), team:teams(id, name)').in('id', linkedIds)
+      : { data: [] };
 
-    const ranked: Scorer[] = (players || []).map(p => ({
+    const rankedLinked: Scorer[] = (players || []).map(p => ({
       player_id: p.id,
       profile_id: p.profile_id,
       full_name: (p.profile as any)?.full_name || '—',
       team_name: (p.team as any)?.name || null,
       position: p.position,
-      goals: goalMap[p.id] || 0,
-      matches_played: matchMap[p.id]?.size || 0,
-    })).sort((a, b) => b.goals - a.goals);
+      goals: linkedGoalMap[p.id] || 0,
+      matches_played: linkedMatchMap[p.id]?.size || 0,
+    }));
 
-    setScorers(ranked);
+    // Buscar nombres de equipos y posiciones para jugadores sin cuenta
+    const unlinkedTeamIds = [...new Set(Object.values(unlinkedMap).map(v => v.team_id))];
+    const [{ data: teamsData }, { data: rosterData }] = await Promise.all([
+      unlinkedTeamIds.length > 0
+        ? supabase.from('teams').select('id, name').in('id', unlinkedTeamIds)
+        : Promise.resolve({ data: [] }),
+      unlinkedTeamIds.length > 0
+        ? supabase.from('team_roster').select('nombre_completo, posicion, team_id').in('team_id', unlinkedTeamIds)
+        : Promise.resolve({ data: [] }),
+    ]);
+
+    const teamNameMap: Record<string, string> = {};
+    (teamsData || []).forEach((t: any) => { teamNameMap[t.id] = t.name; });
+
+    const rosterPosMap: Record<string, string | null> = {};
+    (rosterData || []).forEach((r: any) => { rosterPosMap[`${r.team_id}::${r.nombre_completo}`] = r.posicion; });
+
+    const rankedUnlinked: Scorer[] = Object.entries(unlinkedMap).map(([key, data]) => {
+      const [tid, name] = key.split('::');
+      return {
+        player_id: `unlinked-${key}`,
+        profile_id: '',
+        full_name: name,
+        team_name: teamNameMap[tid] || null,
+        position: rosterPosMap[key] || null,
+        goals: data.goals,
+        matches_played: data.matches.size,
+        is_unlinked: true,
+      };
+    });
+
+    const all = [...rankedLinked, ...rankedUnlinked].sort((a, b) => b.goals - a.goals);
+    setScorers(all);
   };
 
   const fetchRefereeRankings = async () => {
@@ -217,7 +265,12 @@ export function Rankings() {
                             <td className="px-6 py-4">
                               {i < 3 ? <Medal className={`w-5 h-5 ${medalColor(i + 1)}`} /> : <span className="text-slate-500 font-medium">{i + 1}</span>}
                             </td>
-                            <td className="px-6 py-4 font-medium text-slate-900">{s.full_name}</td>
+                            <td className="px-6 py-4">
+                              <div className="flex items-center gap-2">
+                                <span className="font-medium text-slate-900">{s.full_name}</span>
+                                {s.is_unlinked && <span className="text-xs px-1.5 py-0.5 bg-slate-100 text-slate-400 rounded">sin cuenta</span>}
+                              </div>
+                            </td>
                             <td className="px-6 py-4 text-slate-600">{s.team_name || '—'}</td>
                             <td className="px-6 py-4">
                               <span className="px-2.5 py-1 bg-slate-100 text-slate-600 rounded-full text-xs">{s.position || '—'}</span>
@@ -243,7 +296,10 @@ export function Rankings() {
                           {i < 3 ? <Medal className={`w-5 h-5 mx-auto ${medalColor(i + 1)}`} /> : <span className="text-slate-500 font-medium">{i + 1}</span>}
                         </div>
                         <div className="flex-1">
-                          <p className="font-medium text-slate-900">{s.full_name}</p>
+                          <div className="flex items-center gap-1.5">
+                            <p className="font-medium text-slate-900">{s.full_name}</p>
+                            {s.is_unlinked && <span className="text-xs px-1 py-0.5 bg-slate-100 text-slate-400 rounded">sin cuenta</span>}
+                          </div>
                           <p className="text-xs text-slate-500">{s.team_name || '—'} · {s.position || '—'}</p>
                         </div>
                         <div className="flex items-center gap-1 font-bold text-green-600">

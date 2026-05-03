@@ -1,3 +1,6 @@
+# ── Claude Code worktrees ─────────────────────
+.claude/worktrees/
+
 # ── Dependencias ──────────────────────────────
 node_modules/
 .pnp

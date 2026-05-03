@@ -338,10 +338,19 @@ export function Matches({ onNavigate }: MatchesProps) {
     }
 
     // El valor del player puede ser un players.id real o "@roster_id" (jugador sin cuenta)
-    // Solo se guarda si es un players.id real
-    const playerIdValue = eventForm.player_id && !eventForm.player_id.startsWith('@')
-      ? eventForm.player_id
-      : null;
+    const isUnlinked = eventForm.player_id.startsWith('@');
+    const playerIdValue = !isUnlinked ? eventForm.player_id : null;
+
+    // Para jugadores sin cuenta, guardar el nombre en notes con prefijo especial
+    // para que Rankings pueda recuperarlos
+    let finalNotes = eventForm.notes || null;
+    if (isPremium && isUnlinked) {
+      const p = (squad as any[]).find(s => `@${s.roster_id}` === eventForm.player_id);
+      if (p?.profile?.full_name) {
+        const prefix = `#JUGADOR:${p.profile.full_name}#`;
+        finalNotes = eventForm.notes ? `${prefix} ${eventForm.notes}` : prefix;
+      }
+    }
 
     setPanelSaving(true);
     const { error } = await supabase.from('match_events').insert({
@@ -350,7 +359,7 @@ export function Matches({ onNavigate }: MatchesProps) {
       team_id: eventForm.team_id,
       player_id: isPremium ? playerIdValue : null,
       minute: eventForm.minute ? parseInt(eventForm.minute) : null,
-      notes: eventForm.notes || null,
+      notes: finalNotes,
       referee_id: refereeProfileId,
     });
     if (!error) {
@@ -444,6 +453,14 @@ export function Matches({ onNavigate }: MatchesProps) {
     if (type === 'yellow_card') return <div className="w-4 h-5 bg-yellow-400 rounded-sm" />;
     return <div className="w-4 h-5 bg-red-500 rounded-sm" />;
   };
+
+  // Extrae nombre del jugador sin cuenta guardado en notes
+  const parsePlayerFromNotes = (notes: string | null) => {
+    const m = notes?.match(/^#JUGADOR:(.+?)#/);
+    return m ? m[1] : null;
+  };
+  const cleanNotes = (notes: string | null) =>
+    notes?.replace(/^#JUGADOR:.+?#\s*/, '') || null;
 
   // ── SCHEDULE ──
   if (view === 'schedule') {
@@ -638,9 +655,14 @@ export function Matches({ onNavigate }: MatchesProps) {
                         {eventIcon(ev.event_type)}
                         <div>
                           <p className="text-sm font-medium text-slate-900">
-                            {ev.player === null ? '(evento de equipo)' : ev.player?.profile?.full_name || '—'}
+                            {ev.player?.profile?.full_name
+                              || parsePlayerFromNotes(ev.notes)
+                              || '(evento de equipo)'}
                           </p>
                           <p className="text-xs text-slate-500">{ev.team?.name}</p>
+                          {cleanNotes(ev.notes) && (
+                            <p className="text-xs text-slate-400 italic">{cleanNotes(ev.notes)}</p>
+                          )}
                         </div>
                       </div>
                       <div className="flex items-center gap-2">
@@ -797,9 +819,14 @@ export function Matches({ onNavigate }: MatchesProps) {
                     {eventIcon(ev.event_type)}
                     <div>
                       <p className="text-sm font-medium text-slate-900">
-                        {ev.player === null ? '(evento de equipo)' : ev.player?.profile?.full_name || '—'}
+                        {ev.player?.profile?.full_name
+                          || parsePlayerFromNotes(ev.notes)
+                          || '(evento de equipo)'}
                       </p>
                       <p className="text-xs text-slate-500">{ev.team?.name} · {ev.event_type === 'goal' ? 'Gol' : ev.event_type === 'yellow_card' ? 'Tarjeta Amarilla' : 'Tarjeta Roja'}</p>
+                      {cleanNotes(ev.notes) && (
+                        <p className="text-xs text-slate-400 italic">{cleanNotes(ev.notes)}</p>
+                      )}
                     </div>
                   </div>
                   {ev.minute && <span className="text-sm font-medium text-slate-500">{ev.minute}'</span>}
