@@ -42,6 +42,13 @@ const menuByRole: Record<string, { id: string; label: string; icon: any }[]> = {
     { id: 'referees', label: 'Árbitros', icon: Star },
     { id: 'settings', label: 'Configuración', icon: Settings },
   ],
+  lider_equipo: [
+    { id: 'team-leader', label: 'Mi Equipo', icon: Shield },
+    { id: 'matches', label: 'Partidos', icon: Calendar },
+    { id: 'rankings', label: 'Rankings', icon: BarChart3 },
+    { id: 'referees', label: 'Árbitros', icon: Star },
+    { id: 'settings', label: 'Configuración', icon: Settings },
+  ],
 };
 
 const roleLabels: Record<string, string> = {
@@ -49,6 +56,7 @@ const roleLabels: Record<string, string> = {
   director_liga: 'Director de Liga',
   arbitro: 'Árbitro',
   jugador: 'Jugador',
+  lider_equipo: 'Líder de Equipo',
 };
 
 const roleBadgeColors: Record<string, string> = {
@@ -56,6 +64,7 @@ const roleBadgeColors: Record<string, string> = {
   director_liga: 'bg-purple-500',
   arbitro: 'bg-amber-500',
   jugador: 'bg-green-500',
+  lider_equipo: 'bg-violet-500',
 };
 
 export function Layout({ children, currentView, onNavigate, profile, onLogout }: LayoutProps) {
@@ -108,7 +117,6 @@ export function Layout({ children, currentView, onNavigate, profile, onLogout }:
           })}
         </nav>
 
-        {/* User info + logout */}
         <div className="p-4 border-t border-slate-700">
           {sidebarOpen && profile && (
             <div className="flex items-center gap-3 mb-3 px-2">

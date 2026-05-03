@@ -77,6 +77,9 @@ export function Matches({ onNavigate }: MatchesProps) {
   const [scoreForm, setScoreForm] = useState({ home_score: '', away_score: '', observations: '' });
   const [panelSaving, setPanelSaving] = useState(false);
 
+  // team plans: team_id → plan ('estandar' | 'premium')
+  const [teamPlans, setTeamPlans] = useState<Record<string, string>>({});
+
   // validation
   const [rejectReason, setRejectReason] = useState('');
   const [validSaving, setValidSaving] = useState(false);
@@ -113,6 +116,15 @@ export function Matches({ onNavigate }: MatchesProps) {
         .eq('profile_id', user.id)
         .not('team_id', 'is', null);
       const ids = (pls || []).map(p => p.team_id).filter(Boolean) as string[];
+      setPlayerTeamIds(ids);
+      await fetchMatches(ids);
+    } else if (role === 'lider_equipo') {
+      const { data: teamData } = await supabase
+        .from('teams')
+        .select('id')
+        .eq('lider_id', user.id)
+        .single();
+      const ids = teamData ? [teamData.id] : [];
       setPlayerTeamIds(ids);
       await fetchMatches(ids);
     } else {
@@ -208,12 +220,19 @@ export function Matches({ onNavigate }: MatchesProps) {
   };
 
   const fetchSquads = async (match: Match) => {
-    const [{ data: h }, { data: a }] = await Promise.all([
+    const matchTeamIds = [match.home_team_id, match.away_team_id].filter(Boolean) as string[];
+    const [{ data: h }, { data: a }, { data: teamsInfo }] = await Promise.all([
       supabase.from('players').select('id, jersey_number, position, profile:profiles(id, full_name)').eq('team_id', match.home_team_id!),
       supabase.from('players').select('id, jersey_number, position, profile:profiles(id, full_name)').eq('team_id', match.away_team_id!),
+      matchTeamIds.length > 0
+        ? supabase.from('teams').select('id, plan').in('id', matchTeamIds)
+        : Promise.resolve({ data: [] }),
     ]);
     setHomeSquad(h || []);
     setAwaySquad(a || []);
+    const plans: Record<string, string> = {};
+    (teamsInfo || []).forEach((t: any) => { plans[t.id] = t.plan || 'estandar'; });
+    setTeamPlans(plans);
   };
 
   const openDetail = async (match: Match) => {
@@ -257,7 +276,7 @@ export function Matches({ onNavigate }: MatchesProps) {
       .select().single();
     if (!error && data) {
       await logAudit('schedule_match', data.id);
-      await fetchMatches(userRole === 'jugador' ? playerTeamIds : null);
+      await fetchMatches(userRole === 'jugador' || userRole === 'lider_equipo' ? playerTeamIds : null);
       setView('list');
     } else {
       alert('Error al programar partido: ' + error?.message);
@@ -270,19 +289,22 @@ export function Matches({ onNavigate }: MatchesProps) {
     const { error } = await supabase.from('matches').update({ status: 'in_progress' }).eq('id', selected.id);
     if (!error) {
       setSelected({ ...selected, status: 'in_progress' });
-      await fetchMatches(userRole === 'jugador' ? playerTeamIds : null);
+      await fetchMatches(userRole === 'jugador' || userRole === 'lider_equipo' ? playerTeamIds : null);
     }
   };
 
   const handleRegisterEvent = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!selected || !eventForm.team_id || !eventForm.player_id) return;
+    if (!selected || !eventForm.team_id) return;
+    const squad = selectedSquad(eventForm.team_id);
+    const isPremium = teamPlans[eventForm.team_id] === 'premium';
+    if (isPremium && squad.length > 0 && !eventForm.player_id) return;
     setPanelSaving(true);
     const { error } = await supabase.from('match_events').insert({
       match_id: selected.id,
       event_type: eventForm.event_type,
       team_id: eventForm.team_id,
-      player_id: eventForm.player_id,
+      player_id: (isPremium && eventForm.player_id) ? eventForm.player_id : null,
       minute: eventForm.minute ? parseInt(eventForm.minute) : null,
       notes: eventForm.notes || null,
       referee_id: refereeProfileId,
@@ -323,7 +345,7 @@ export function Matches({ onNavigate }: MatchesProps) {
         closed_at: new Date().toISOString(),
       }, { onConflict: 'match_id' });
       await logAudit('close_match_report', selected.id);
-      await fetchMatches(userRole === 'jugador' ? playerTeamIds : null);
+      await fetchMatches(userRole === 'jugador' || userRole === 'lider_equipo' ? playerTeamIds : null);
       setView('list');
     } else {
       alert('Error al finalizar: ' + error.message);
@@ -337,7 +359,7 @@ export function Matches({ onNavigate }: MatchesProps) {
     const { error } = await supabase.from('matches').update({ status: 'validated', validated_by: currentProfile?.id, validated_at: new Date().toISOString() }).eq('id', selected.id);
     if (!error) {
       await logAudit('validate_match', selected.id);
-      await fetchMatches(userRole === 'jugador' ? playerTeamIds : null);
+      await fetchMatches(userRole === 'jugador' || userRole === 'lider_equipo' ? playerTeamIds : null);
       setView('list');
     } else {
       alert('Error: ' + error.message);
@@ -351,7 +373,7 @@ export function Matches({ onNavigate }: MatchesProps) {
     const { error } = await supabase.from('matches').update({ status: 'rejected', rejection_reason: rejectReason, validated_by: currentProfile?.id, validated_at: new Date().toISOString() }).eq('id', selected.id);
     if (!error) {
       await logAudit('reject_match', selected.id, { new_value: rejectReason });
-      await fetchMatches(userRole === 'jugador' ? playerTeamIds : null);
+      await fetchMatches(userRole === 'jugador' || userRole === 'lider_equipo' ? playerTeamIds : null);
       setView('list');
     } else {
       alert('Error: ' + error.message);
@@ -513,21 +535,26 @@ export function Matches({ onNavigate }: MatchesProps) {
                   </select>
                 </div>
                 {eventForm.team_id && (
-                  <div>
-                    <label className="block text-sm font-medium text-slate-700 mb-1">Jugador *</label>
-                    <select required className="w-full px-3 py-2.5 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
-                      value={eventForm.player_id} onChange={e => setEventForm({ ...eventForm, player_id: e.target.value })}>
-                      <option value="">Seleccionar jugador...</option>
-                      {currentSquad.map((p: any) => (
-                        <option key={p.id} value={p.id}>
-                          {p.jersey_number ? `#${p.jersey_number} ` : ''}{p.profile?.full_name}
-                        </option>
-                      ))}
-                    </select>
-                    {currentSquad.length === 0 && (
-                      <p className="text-xs text-amber-600 mt-1">Este equipo no tiene jugadores registrados en su plantilla</p>
-                    )}
-                  </div>
+                  teamPlans[eventForm.team_id] === 'premium' ? (
+                    currentSquad.length > 0 ? (
+                      <div>
+                        <label className="block text-sm font-medium text-slate-700 mb-1">Jugador *</label>
+                        <select required className="w-full px-3 py-2.5 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
+                          value={eventForm.player_id} onChange={e => setEventForm({ ...eventForm, player_id: e.target.value })}>
+                          <option value="">Seleccionar jugador...</option>
+                          {currentSquad.map((p: any) => (
+                            <option key={p.id} value={p.id}>
+                              {p.jersey_number ? `#${p.jersey_number} ` : ''}{p.profile?.full_name}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    ) : (
+                      <p className="text-xs text-amber-600 p-2 bg-amber-50 rounded-lg">Equipo premium sin jugadores vinculados aún</p>
+                    )
+                  ) : (
+                    <p className="text-xs text-slate-500 p-2 bg-slate-50 rounded-lg">Evento registrado a nivel de equipo (plan Estándar)</p>
+                  )
                 )}
                 <div>
                   <label className="block text-sm font-medium text-slate-700 mb-1">Minuto</label>
@@ -562,7 +589,9 @@ export function Matches({ onNavigate }: MatchesProps) {
                       <div className="flex items-center gap-3">
                         {eventIcon(ev.event_type)}
                         <div>
-                          <p className="text-sm font-medium text-slate-900">{ev.player?.profile?.full_name || '—'}</p>
+                          <p className="text-sm font-medium text-slate-900">
+                            {ev.player === null ? '(evento de equipo)' : ev.player?.profile?.full_name || '—'}
+                          </p>
                           <p className="text-xs text-slate-500">{ev.team?.name}</p>
                         </div>
                       </div>
@@ -719,7 +748,9 @@ export function Matches({ onNavigate }: MatchesProps) {
                   <div className="flex items-center gap-3">
                     {eventIcon(ev.event_type)}
                     <div>
-                      <p className="text-sm font-medium text-slate-900">{ev.player?.profile?.full_name || '—'}</p>
+                      <p className="text-sm font-medium text-slate-900">
+                        {ev.player === null ? '(evento de equipo)' : ev.player?.profile?.full_name || '—'}
+                      </p>
                       <p className="text-xs text-slate-500">{ev.team?.name} · {ev.event_type === 'goal' ? 'Gol' : ev.event_type === 'yellow_card' ? 'Tarjeta Amarilla' : 'Tarjeta Roja'}</p>
                     </div>
                   </div>

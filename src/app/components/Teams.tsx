@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Shield, Plus, ArrowLeft, Save, UserMinus, Search, Users, Pencil, Trash2 } from 'lucide-react';
+import { Shield, Plus, ArrowLeft, Save, UserMinus, Search, Users, Pencil, Trash2, RefreshCw } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
 
 interface Profile { id: string; full_name: string; email: string; }
@@ -11,6 +11,11 @@ interface Team {
   manager_id: string | null;
   city: string | null;
   status: string;
+  plan: string;
+  plan_activo_hasta: string | null;
+  codigo_verificacion: string | null;
+  codigo_expira_en: string | null;
+  lider_id: string | null;
   league: League | null;
   manager: Profile | null;
   player_count: number;
@@ -25,6 +30,13 @@ interface Player {
 
 const initials = (name: string) =>
   name?.split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase() || '?';
+
+const generateCode = () => {
+  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+  let code = '';
+  for (let i = 0; i < 8; i++) code += chars.charAt(Math.floor(Math.random() * chars.length));
+  return code;
+};
 
 export function Teams() {
   const [view, setView] = useState<'list' | 'detail' | 'create' | 'edit'>('list');
@@ -43,10 +55,10 @@ export function Teams() {
   const [editForm, setEditForm] = useState({ name: '', league_id: '', city: '', status: 'active' });
   const [editingTeam, setEditingTeam] = useState<Team | null>(null);
   const [error, setError] = useState('');
+  const [showPlanChange, setShowPlanChange] = useState(false);
+  const [planForm, setPlanForm] = useState({ plan: 'estandar', plan_activo_hasta: '' });
 
-  useEffect(() => {
-    loadInit();
-  }, []);
+  useEffect(() => { loadInit(); }, []);
 
   const loadInit = async () => {
     const { data: { user } } = await supabase.auth.getUser();
@@ -56,39 +68,27 @@ export function Teams() {
     const role = profile?.role || '';
     setUserRole(role);
 
-    // Para jugadores, obtener TODOS sus equipos (puede ser más de uno)
     let playerTids: string[] | null = null;
     if (role === 'jugador') {
-      const { data: pls } = await supabase
-        .from('players')
-        .select('team_id')
-        .eq('profile_id', user.id)
-        .not('team_id', 'is', null);
+      const { data: pls } = await supabase.from('players').select('team_id').eq('profile_id', user.id).not('team_id', 'is', null);
       playerTids = (pls || []).map(p => p.team_id).filter(Boolean) as string[];
+    } else if (role === 'lider_equipo') {
+      const { data: team } = await supabase.from('teams').select('id').eq('lider_id', user.id).maybeSingle();
+      playerTids = team ? [team.id] : [];
     }
 
     await Promise.all([fetchTeams(playerTids), fetchLeagues()]);
   };
 
-  // playerTids: null = no jugador (muestra todos). Array vacío = jugador sin equipo.
   const fetchTeams = async (playerTids: string[] | null = null) => {
     setLoading(true);
-
-    if (playerTids !== null && playerTids.length === 0) {
-      setTeams([]);
-      setLoading(false);
-      return;
-    }
+    if (playerTids !== null && playerTids.length === 0) { setTeams([]); setLoading(false); return; }
 
     let baseQuery = supabase
       .from('teams')
       .select('*, league:leagues(id, name), manager:profiles!teams_manager_id_fkey(id, full_name, email)')
       .order('name');
-
-    let fallbackQuery = supabase
-      .from('teams')
-      .select('*, league:leagues(id, name)')
-      .order('name');
+    let fallbackQuery = supabase.from('teams').select('*, league:leagues(id, name)').order('name');
 
     if (playerTids !== null) {
       baseQuery = baseQuery.in('id', playerTids) as any;
@@ -96,7 +96,6 @@ export function Teams() {
     }
 
     const { data, error } = await baseQuery;
-
     if (error) {
       const { data: d2 } = await fallbackQuery;
       const rows = d2 || [];
@@ -154,6 +153,7 @@ export function Teams() {
   const openDetail = async (team: Team) => {
     setSelectedTeam(team);
     setSearchPlayer('');
+    setShowPlanChange(false);
     await fetchTeamDetail(team.id);
     setView('detail');
   };
@@ -212,19 +212,21 @@ export function Teams() {
       .in('status', ['scheduled', 'in_progress', 'pending_validation']);
 
     if ((activeMatches ?? 0) > 0) {
-      alert(`No se puede eliminar "${team.name}" porque tiene ${activeMatches} partido(s) activo(s). Primero cancela o finaliza esos partidos.`);
+      alert(`No se puede eliminar "${team.name}" porque tiene ${activeMatches} partido(s) activo(s).`);
       return;
     }
 
-    const playerMsg = team.player_count > 0
-      ? `\n⚠️ Tiene ${team.player_count} jugador(es) asignado(s) que quedarán sin equipo.`
-      : '';
-
-    if (!window.confirm(`¿Eliminar el equipo "${team.name}"?${playerMsg}\n\nEsta acción no se puede deshacer.`)) return;
+    if (!window.confirm(`¿Eliminar el equipo "${team.name}"?\n\nSe eliminarán el roster y datos relacionados. Esta acción no se puede deshacer.`)) return;
 
     setSaving(true);
-    // Desasignar jugadores primero
+
+    // Limpiar registros dependientes en orden
+    await supabase.from('team_roster').delete().eq('team_id', team.id);
+    await supabase.from('arbitraje_pagos').delete().eq('team_id', team.id);
+    await supabase.from('match_events').delete().eq('team_id', team.id);
     await supabase.from('players').update({ team_id: null }).eq('team_id', team.id);
+    // Las referencias en matches se nullifican automáticamente por la FK ON DELETE SET NULL
+
     const { error: err } = await supabase.from('teams').delete().eq('id', team.id);
     if (!err) {
       try { await supabase.from('audit_logs').insert({ user_id: currentProfile?.id, action: 'delete_team', table_name: 'teams', record_id: team.id, new_value: team.name }); } catch (_) {}
@@ -232,6 +234,35 @@ export function Teams() {
       await fetchTeams(null);
     } else {
       alert('Error al eliminar: ' + err.message);
+    }
+    setSaving(false);
+  };
+
+  const handleChangePlan = async () => {
+    if (!selectedTeam) return;
+    setSaving(true);
+    const isPremium = planForm.plan === 'premium';
+    const wasNotPremium = selectedTeam.plan !== 'premium';
+    const code = isPremium && wasNotPremium ? generateCode() : (isPremium ? selectedTeam.codigo_verificacion : null);
+    const codeExpiry = isPremium && wasNotPremium ? new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString() : (isPremium ? selectedTeam.codigo_expira_en : null);
+
+    const { error: err } = await supabase.from('teams').update({
+      plan: planForm.plan,
+      plan_activo_hasta: planForm.plan_activo_hasta || null,
+      codigo_verificacion: code,
+      codigo_expira_en: codeExpiry,
+    }).eq('id', selectedTeam.id);
+
+    if (!err) {
+      const updated = { ...selectedTeam, plan: planForm.plan as any, plan_activo_hasta: planForm.plan_activo_hasta || null, codigo_verificacion: code || null, codigo_expira_en: codeExpiry || null };
+      setSelectedTeam(updated);
+      setShowPlanChange(false);
+      await fetchTeams(userRole === 'jugador' || userRole === 'lider_equipo' ? teams.map(t => t.id) : null);
+      if (isPremium && wasNotPremium) {
+        alert(`Plan actualizado a Premium. Código de verificación: ${code}\nVálido por 7 días.`);
+      }
+    } else {
+      alert('Error al cambiar plan: ' + err.message);
     }
     setSaving(false);
   };
@@ -253,6 +284,17 @@ export function Teams() {
   const canManage = userRole === 'admin_plataforma' || userRole === 'director_liga';
   const filteredAvailable = available.filter(p =>
     p.profile?.full_name?.toLowerCase().includes(searchPlayer.toLowerCase())
+  );
+
+  const fmtDate = (dt: string | null) => {
+    if (!dt) return '—';
+    return new Date(dt).toLocaleDateString('es-MX', { day: 'numeric', month: 'short', year: 'numeric' });
+  };
+
+  const PlanBadge = ({ plan }: { plan: string }) => (
+    <span className={`px-2 py-0.5 rounded-full text-xs font-bold ${plan === 'premium' ? 'bg-yellow-100 text-yellow-700' : 'bg-slate-100 text-slate-500'}`}>
+      {plan === 'premium' ? '★ Premium' : 'Estándar'}
+    </span>
   );
 
   // ── EDIT ──
@@ -380,9 +422,15 @@ export function Teams() {
               <Shield className="w-10 h-10 text-white" />
             </div>
             <div className="flex-1">
-              <h2 className="text-2xl font-bold text-white">{t.name}</h2>
+              <div className="flex flex-wrap items-center gap-2 mb-1">
+                <h2 className="text-2xl font-bold text-white">{t.name}</h2>
+                <span className={`px-2.5 py-0.5 rounded-full text-xs font-bold ${t.plan === 'premium' ? 'bg-yellow-400 text-yellow-900' : 'bg-white/20 text-white'}`}>
+                  {t.plan === 'premium' ? '★ Premium' : 'Estándar'}
+                </span>
+              </div>
               <p className="text-green-100">{t.league?.name || 'Sin liga'}</p>
               {t.city && <p className="text-green-100 text-sm">{t.city}</p>}
+              {t.plan_activo_hasta && <p className="text-green-100 text-xs">Temporada hasta: {fmtDate(t.plan_activo_hasta)}</p>}
               <span className={`inline-block mt-1 px-2 py-0.5 rounded text-xs font-medium ${t.status === 'active' ? 'bg-white/20' : 'bg-white/10 line-through'}`}>
                 {t.status === 'active' ? 'Activo' : 'Inactivo'}
               </span>
@@ -393,6 +441,10 @@ export function Teams() {
                   className="flex items-center gap-1.5 px-3 py-1.5 bg-white/20 hover:bg-white/30 text-white rounded-lg text-sm font-medium transition-colors">
                   <Pencil className="w-3.5 h-3.5" /> Editar
                 </button>
+                <button onClick={() => setShowPlanChange(!showPlanChange)}
+                  className="flex items-center gap-1.5 px-3 py-1.5 bg-white/20 hover:bg-white/30 text-white rounded-lg text-sm font-medium transition-colors">
+                  <RefreshCw className="w-3.5 h-3.5" /> Plan
+                </button>
                 <button onClick={() => handleDeleteTeam(t)} disabled={saving}
                   className="flex items-center gap-1.5 px-3 py-1.5 bg-red-500/80 hover:bg-red-600 text-white rounded-lg text-sm font-medium transition-colors disabled:opacity-50">
                   <Trash2 className="w-3.5 h-3.5" /> Eliminar
@@ -401,6 +453,40 @@ export function Teams() {
             )}
           </div>
         </div>
+
+        {/* Plan Change Panel */}
+        {canManage && showPlanChange && (
+          <div className="bg-white rounded-xl border border-slate-200 p-5">
+            <h3 className="font-semibold text-slate-900 mb-4">Cambiar Plan del Equipo</h3>
+            <div className="flex flex-wrap gap-4 items-end">
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">Plan</label>
+                <select className="px-3 py-2.5 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
+                  value={planForm.plan} onChange={e => setPlanForm({ ...planForm, plan: e.target.value })}>
+                  <option value="estandar">Estándar ($300 MXN)</option>
+                  <option value="premium">Premium ($500 MXN)</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">Temporada activa hasta</label>
+                <input type="date"
+                  className="px-3 py-2.5 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
+                  value={planForm.plan_activo_hasta} onChange={e => setPlanForm({ ...planForm, plan_activo_hasta: e.target.value })} />
+              </div>
+              <button onClick={handleChangePlan} disabled={saving}
+                className="px-5 py-2.5 bg-green-500 hover:bg-green-600 text-white rounded-lg font-medium disabled:opacity-50 transition-colors">
+                {saving ? 'Guardando...' : 'Aplicar cambio'}
+              </button>
+              <button onClick={() => setShowPlanChange(false)}
+                className="px-5 py-2.5 border border-slate-300 text-slate-700 rounded-lg hover:bg-slate-50">
+                Cancelar
+              </button>
+            </div>
+            {planForm.plan === 'premium' && t.plan !== 'premium' && (
+              <p className="text-xs text-green-600 mt-2">Se generará automáticamente un código de verificación válido por 7 días.</p>
+            )}
+          </div>
+        )}
 
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
           {[
@@ -484,12 +570,11 @@ export function Teams() {
           )}
         </div>
 
-        {/* Assign players */}
         {canManage && (
           <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
             <div className="p-5 border-b border-slate-200 bg-slate-50">
-              <h3 className="font-semibold text-slate-900">Agregar jugadores sin equipo</h3>
-              <p className="text-xs text-slate-400 mt-0.5">Solo jugadores que no pertenecen a ningún equipo</p>
+              <h3 className="font-semibold text-slate-900">Agregar jugadores premium sin equipo</h3>
+              <p className="text-xs text-slate-400 mt-0.5">Solo jugadores con cuenta activa que no pertenecen a ningún equipo</p>
             </div>
             <div className="p-4">
               <div className="relative mb-3">
@@ -500,7 +585,7 @@ export function Teams() {
               </div>
               {filteredAvailable.length === 0 ? (
                 <p className="text-slate-400 text-sm text-center py-4">
-                  {available.length === 0 ? 'No hay jugadores sin equipo disponibles' : 'Sin resultados para la búsqueda'}
+                  {available.length === 0 ? 'No hay jugadores sin equipo disponibles' : 'Sin resultados'}
                 </p>
               ) : (
                 <div className="space-y-2 max-h-52 overflow-y-auto">
@@ -554,10 +639,10 @@ export function Teams() {
             <Shield className="w-8 h-8 text-slate-400" />
           </div>
           <p className="text-slate-500 font-medium">
-            {userRole === 'jugador' ? 'No perteneces a ningún equipo aún' : 'No hay equipos registrados'}
+            {userRole === 'jugador' || userRole === 'lider_equipo' ? 'No perteneces a ningún equipo aún' : 'No hay equipos registrados'}
           </p>
           {canManage && <p className="text-slate-400 text-sm mt-1">Crea el primer equipo con el botón de arriba</p>}
-          {userRole === 'jugador' && <p className="text-slate-400 text-sm mt-1">Pide a tu director de liga que te asigne a un equipo</p>}
+          {(userRole === 'jugador' || userRole === 'lider_equipo') && <p className="text-slate-400 text-sm mt-1">Tu equipo aparecerá aquí cuando el director lo active</p>}
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -573,7 +658,7 @@ export function Teams() {
                   {team.city && <p className="text-xs text-slate-400 truncate">{team.city}</p>}
                 </div>
               </div>
-              <div className="grid grid-cols-2 gap-2 mb-4">
+              <div className="grid grid-cols-3 gap-2 mb-4">
                 <div className="bg-slate-50 rounded-lg p-2 text-center">
                   <p className="text-slate-400 text-xs">Jugadores</p>
                   <p className="font-bold text-slate-900">{team.player_count}</p>
@@ -582,6 +667,12 @@ export function Teams() {
                   <p className="text-slate-400 text-xs">Estado</p>
                   <p className={`font-medium text-xs ${team.status === 'active' ? 'text-green-600' : 'text-slate-400'}`}>
                     {team.status === 'active' ? 'Activo' : 'Inactivo'}
+                  </p>
+                </div>
+                <div className="bg-slate-50 rounded-lg p-2 text-center">
+                  <p className="text-slate-400 text-xs">Plan</p>
+                  <p className={`font-bold text-xs ${team.plan === 'premium' ? 'text-yellow-600' : 'text-slate-500'}`}>
+                    {team.plan === 'premium' ? '★ Prem.' : 'Std.'}
                   </p>
                 </div>
               </div>
@@ -593,11 +684,11 @@ export function Teams() {
                 {canManage && (
                   <>
                     <button onClick={() => openEdit(team)}
-                      className="p-2 border border-slate-300 hover:bg-slate-50 text-slate-600 rounded-lg transition-colors" title="Editar equipo">
+                      className="p-2 border border-slate-300 hover:bg-slate-50 text-slate-600 rounded-lg transition-colors" title="Editar">
                       <Pencil className="w-4 h-4" />
                     </button>
                     <button onClick={() => handleDeleteTeam(team)} disabled={saving}
-                      className="p-2 border border-red-200 hover:bg-red-50 text-red-500 rounded-lg transition-colors disabled:opacity-40" title="Eliminar equipo">
+                      className="p-2 border border-red-200 hover:bg-red-50 text-red-500 rounded-lg transition-colors disabled:opacity-40" title="Eliminar">
                       <Trash2 className="w-4 h-4" />
                     </button>
                   </>

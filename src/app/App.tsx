@@ -10,6 +10,7 @@ import { Referees } from './components/Referees';
 import { Rankings } from './components/Rankings';
 import { Reports } from './components/Reports';
 import { Settings } from './components/Settings';
+import { TeamLeaderPanel } from './components/TeamLeaderPanel';
 
 export default function App() {
   const [session, setSession] = useState<any>(null);
@@ -41,6 +42,7 @@ export default function App() {
       .single();
     setProfile(data);
     if (data?.role === 'jugador') setCurrentView('players');
+    else if (data?.role === 'lider_equipo') setCurrentView('team-leader');
     setLoading(false);
   };
 
@@ -74,8 +76,15 @@ export default function App() {
           </div>
           <h2 className="text-xl font-bold text-slate-900 mb-2">Cuenta pendiente de aprobación</h2>
           <p className="text-slate-500 text-sm mb-6">
-            Tu solicitud como <span className="font-semibold capitalize">{profile.role}</span> está siendo revisada por el administrador. Te notificaremos por correo cuando sea aprobada.
+            Tu solicitud como <span className="font-semibold capitalize">{
+              profile.role === 'lider_equipo' ? 'Líder de Equipo' : profile.role
+            }</span> está siendo revisada por el administrador. Te notificaremos cuando sea aprobada.
           </p>
+          <button
+            onClick={() => session && fetchProfile(session.user.id)}
+            className="w-full mb-3 px-4 py-2.5 bg-green-500 hover:bg-green-600 text-white rounded-lg text-sm font-medium transition-colors">
+            Ya me aprobaron — Verificar ahora
+          </button>
           <button onClick={handleLogout} className="text-sm text-slate-400 hover:text-slate-600">
             Cerrar sesión
           </button>
@@ -111,6 +120,7 @@ export default function App() {
       case 'rankings': return <Rankings />;
       case 'reports': return <Reports />;
       case 'settings': return <Settings />;
+      case 'team-leader': return <TeamLeaderPanel />;
       default: return <Dashboard />;
     }
   };
