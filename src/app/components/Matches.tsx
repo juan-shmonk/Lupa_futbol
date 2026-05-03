@@ -221,15 +221,47 @@ export function Matches({ onNavigate }: MatchesProps) {
 
   const fetchSquads = async (match: Match) => {
     const matchTeamIds = [match.home_team_id, match.away_team_id].filter(Boolean) as string[];
-    const [{ data: h }, { data: a }, { data: teamsInfo }] = await Promise.all([
-      supabase.from('players').select('id, jersey_number, position, profile:profiles(id, full_name)').eq('team_id', match.home_team_id!),
-      supabase.from('players').select('id, jersey_number, position, profile:profiles(id, full_name)').eq('team_id', match.away_team_id!),
+
+    const [
+      { data: homeRoster }, { data: awayRoster },
+      { data: homePlayers }, { data: awayPlayers },
+      { data: teamsInfo }
+    ] = await Promise.all([
+      // team_roster como fuente principal (muestra TODOS los jugadores del equipo)
+      supabase.from('team_roster').select('id, nombre_completo, numero_jersey, posicion, profile_id')
+        .eq('team_id', match.home_team_id!).order('nombre_completo'),
+      supabase.from('team_roster').select('id, nombre_completo, numero_jersey, posicion, profile_id')
+        .eq('team_id', match.away_team_id!).order('nombre_completo'),
+      // players para obtener el players.id necesario para match_events
+      supabase.from('players').select('id, profile_id').eq('team_id', match.home_team_id!),
+      supabase.from('players').select('id, profile_id').eq('team_id', match.away_team_id!),
       matchTeamIds.length > 0
         ? supabase.from('teams').select('id, plan').in('id', matchTeamIds)
         : Promise.resolve({ data: [] }),
     ]);
-    setHomeSquad(h || []);
-    setAwaySquad(a || []);
+
+    // Mapa profile_id → players.id para ligar eventos
+    const toMap = (rows: any[]) => {
+      const m: Record<string, string> = {};
+      (rows || []).forEach(p => { if (p.profile_id) m[p.profile_id] = p.id; });
+      return m;
+    };
+    const homeMap = toMap(homePlayers || []);
+    const awayMap = toMap(awayPlayers || []);
+
+    // Unificar: cada entrada del roster con su players.id si existe
+    const buildSquad = (roster: any[], pMap: Record<string, string>) =>
+      (roster || []).map(r => ({
+        id: r.profile_id ? (pMap[r.profile_id] || null) : null,  // players.id
+        roster_id: r.id,
+        jersey_number: r.numero_jersey,
+        position: r.posicion,
+        profile: { full_name: r.nombre_completo },
+      }));
+
+    setHomeSquad(buildSquad(homeRoster || [], homeMap));
+    setAwaySquad(buildSquad(awayRoster || [], awayMap));
+
     const plans: Record<string, string> = {};
     (teamsInfo || []).forEach((t: any) => { plans[t.id] = t.plan || 'estandar'; });
     setTeamPlans(plans);
@@ -298,19 +330,31 @@ export function Matches({ onNavigate }: MatchesProps) {
     if (!selected || !eventForm.team_id) return;
     const squad = selectedSquad(eventForm.team_id);
     const isPremium = teamPlans[eventForm.team_id] === 'premium';
-    if (isPremium && squad.length > 0 && !eventForm.player_id) return;
+
+    // Para equipos premium con plantilla, el jugador es obligatorio
+    if (isPremium && squad.length > 0 && !eventForm.player_id) {
+      alert('Selecciona el jugador para el evento');
+      return;
+    }
+
+    // El valor del player puede ser un players.id real o "@roster_id" (jugador sin cuenta)
+    // Solo se guarda si es un players.id real
+    const playerIdValue = eventForm.player_id && !eventForm.player_id.startsWith('@')
+      ? eventForm.player_id
+      : null;
+
     setPanelSaving(true);
     const { error } = await supabase.from('match_events').insert({
       match_id: selected.id,
       event_type: eventForm.event_type,
       team_id: eventForm.team_id,
-      player_id: (isPremium && eventForm.player_id) ? eventForm.player_id : null,
+      player_id: isPremium ? playerIdValue : null,
       minute: eventForm.minute ? parseInt(eventForm.minute) : null,
       notes: eventForm.notes || null,
       referee_id: refereeProfileId,
     });
     if (!error) {
-      setEventForm({ event_type: 'goal', team_id: '', player_id: '', minute: '', notes: '' });
+      setEventForm({ event_type: 'goal', team_id: eventForm.team_id, player_id: '', minute: '', notes: '' });
       await fetchMatchEvents(selected.id);
     } else {
       alert('Error: ' + error.message);
@@ -539,21 +583,25 @@ export function Matches({ onNavigate }: MatchesProps) {
                     currentSquad.length > 0 ? (
                       <div>
                         <label className="block text-sm font-medium text-slate-700 mb-1">Jugador *</label>
-                        <select required className="w-full px-3 py-2.5 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
-                          value={eventForm.player_id} onChange={e => setEventForm({ ...eventForm, player_id: e.target.value })}>
+                        <select
+                          className="w-full px-3 py-2.5 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
+                          value={eventForm.player_id}
+                          onChange={e => setEventForm({ ...eventForm, player_id: e.target.value })}
+                        >
                           <option value="">Seleccionar jugador...</option>
                           {currentSquad.map((p: any) => (
-                            <option key={p.id} value={p.id}>
+                            <option key={p.roster_id || p.id} value={p.id || `@${p.roster_id}`}>
                               {p.jersey_number ? `#${p.jersey_number} ` : ''}{p.profile?.full_name}
+                              {!p.id ? ' (sin cuenta)' : ''}
                             </option>
                           ))}
                         </select>
                       </div>
                     ) : (
-                      <p className="text-xs text-amber-600 p-2 bg-amber-50 rounded-lg">Equipo premium sin jugadores vinculados aún</p>
+                      <p className="text-xs text-amber-600 p-2 bg-amber-50 rounded-lg">Equipo premium sin jugadores registrados en el roster</p>
                     )
                   ) : (
-                    <p className="text-xs text-slate-500 p-2 bg-slate-50 rounded-lg">Evento registrado a nivel de equipo (plan Estándar)</p>
+                    <p className="text-xs text-slate-500 p-2 bg-slate-50 rounded-lg">Equipo estándar — evento registrado a nivel de equipo</p>
                   )
                 )}
                 <div>
