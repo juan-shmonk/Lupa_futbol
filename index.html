@@ -1,16 +1,45 @@
+<!DOCTYPE html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 
-  <!DOCTYPE html>
-  <html lang="en">
-    <head>
-      <meta charset="UTF-8" />
-      <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-     <title>Lupa Fútbol | Gestión de ligas, equipos y partidos</title>
-      <style>html, body { height: 100%; margin: 0; } #root { height: 100%; }</style>
-    </head>
+    <title>Lupa Fútbol | Gestión de ligas, equipos y partidos</title>
 
-    <body>
-      <div id="root"></div>
-      <script type="module" src="/src/main.tsx"></script>
-    </body>
-  </html>
-  
+    <!-- Meta descripción para buscadores -->
+    <meta
+      name="description"
+      content="Lupa Fútbol es una plataforma para la gestión de ligas, equipos, jugadores, árbitros, partidos y estadísticas de fútbol."
+    />
+
+    <!-- Logo / favicon de la pestaña -->
+    <link rel="icon" type="image/png" href="public/image/logo.png" />
+
+    <!-- Vista previa al compartir en redes sociales / WhatsApp -->
+    <meta property="og:title" content="Lupa Fútbol | Gestión de ligas, equipos y partidos" />
+    <meta
+      property="og:description"
+      content="Plataforma para gestionar ligas, equipos, jugadores, árbitros, partidos y estadísticas."
+    />
+    <meta property="og:image" content="https://lupa-futbol.vercel.app/logo.png" />
+    <meta property="og:url" content="https://lupa-futbol.vercel.app/" />
+    <meta property="og:type" content="website" />
+
+    <style>
+      html,
+      body {
+        height: 100%;
+        margin: 0;
+      }
+
+      #root {
+        height: 100%;
+      }
+    </style>
+  </head>
+
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
