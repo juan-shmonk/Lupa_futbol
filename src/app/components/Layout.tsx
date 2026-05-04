@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Menu, X, Home, Users, Shield, Calendar, Trophy, BarChart3, FileText, Settings, LogOut, Star } from 'lucide-react';
+import { Menu, X, Home, Users, Shield, Calendar, Trophy, BarChart3, FileText, Settings, LogOut, Star, Flag } from 'lucide-react';
 
 interface LayoutProps {
   children: React.ReactNode;
@@ -22,6 +22,7 @@ const menuByRole: Record<string, { id: string; label: string; icon: any }[]> = {
   ],
   director_liga: [
     { id: 'dashboard', label: 'Dashboard', icon: Home },
+    { id: 'tournaments', label: 'Torneos', icon: Flag },
     { id: 'teams', label: 'Equipos', icon: Shield },
     { id: 'matches', label: 'Partidos', icon: Calendar },
     { id: 'players', label: 'Jugadores', icon: Users },

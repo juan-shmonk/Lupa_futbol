@@ -11,6 +11,7 @@ import { Rankings } from './components/Rankings';
 import { Reports } from './components/Reports';
 import { Settings } from './components/Settings';
 import { TeamLeaderPanel } from './components/TeamLeaderPanel';
+import { Tournaments } from './components/Tournaments';
 
 export default function App() {
   const [session, setSession] = useState<any>(null);
@@ -121,6 +122,7 @@ export default function App() {
       case 'reports': return <Reports />;
       case 'settings': return <Settings />;
       case 'team-leader': return <TeamLeaderPanel />;
+      case 'tournaments': return <Tournaments />;
       default: return <Dashboard />;
     }
   };
