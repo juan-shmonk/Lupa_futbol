@@ -34,7 +34,7 @@ export function Referees() {
   const [loading, setLoading] = useState(true);
   const [currentProfile, setCurrentProfile] = useState<any>(null);
   const [userRole, setUserRole] = useState('');
-  const [myPlayer, setMyPlayer] = useState<any>(null);
+  const [myTeam, setMyTeam] = useState<any>(null);
 
   // Rating form
   const [ratingForm, setRatingForm] = useState({ score: 5, comment: '' });
@@ -55,9 +55,9 @@ export function Referees() {
     const { data: prof } = await supabase.from('profiles').select('*').eq('id', user.id).single();
     setCurrentProfile(prof);
     setUserRole(prof?.role || '');
-    if (prof?.role === 'jugador') {
-      const { data: pl } = await supabase.from('players').select('id, team_id').eq('profile_id', user.id).single();
-      setMyPlayer(pl);
+    if (prof?.role === 'lider_equipo') {
+      const { data: team } = await supabase.from('teams').select('id, name').eq('lider_id', user.id).maybeSingle();
+      setMyTeam(team);
     }
     await fetchReferees();
   };
@@ -139,7 +139,7 @@ export function Referees() {
     setSelected(ref);
     const { data: ratings } = await supabase
       .from('referee_ratings')
-      .select('score, comment, created_at, player:players(profile:profiles(full_name))')
+      .select('score, comment, created_at, rater:profiles!referee_ratings_rater_profile_id_fkey(full_name)')
       .eq('referee_id', ref.id)
       .order('created_at', { ascending: false });
     setSelectedRatings(ratings || []);
@@ -152,16 +152,16 @@ export function Referees() {
       .limit(10);
     setRefereeMatches(matchesData || []);
 
-    // Any registered jugador can rate any referee
+    // Solo líderes de equipo pueden calificar árbitros
     setCanRateSelected(false);
     setAlreadyRated(false);
-    if (myPlayer && userRole === 'jugador') {
+    if (userRole === 'lider_equipo' && myTeam) {
       setCanRateSelected(true);
       const { data: existing } = await supabase
         .from('referee_ratings')
         .select('id')
         .eq('referee_id', ref.id)
-        .eq('player_id', myPlayer.id)
+        .eq('rater_profile_id', currentProfile.id)
         .limit(1);
       setAlreadyRated(!!(existing && existing.length > 0));
     }
@@ -196,11 +196,12 @@ export function Referees() {
 
   const handleSubmitRating = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!selected || !myPlayer) return;
+    if (!selected || !currentProfile) return;
     setRatingSaving(true);
     const { error } = await supabase.from('referee_ratings').insert({
       referee_id: selected.id,
-      player_id: myPlayer.id,
+      player_id: null,
+      rater_profile_id: currentProfile.id,
       match_id: null,
       score: ratingForm.score,
       comment: ratingForm.comment || null,
@@ -472,7 +473,7 @@ export function Referees() {
           </div>
         )}
 
-        {/* Rating form for players */}
+        {/* Rating form for team leaders */}
         {canRateSelected && !alreadyRated && (
           <div className="bg-white rounded-xl border border-green-200 p-5">
             <h3 className="font-semibold text-slate-900 mb-4 flex items-center gap-2">
@@ -513,12 +514,12 @@ export function Referees() {
 
         {selectedRatings.length > 0 && (
           <div className="bg-white rounded-xl border border-slate-200 p-5">
-            <h3 className="font-semibold text-slate-900 mb-4">Opiniones de jugadores</h3>
+            <h3 className="font-semibold text-slate-900 mb-4">Opiniones de líderes de equipo</h3>
             <div className="space-y-3">
               {selectedRatings.map((rat, i) => (
                 <div key={i} className="p-3 bg-slate-50 rounded-lg">
                   <div className="flex items-center justify-between mb-1">
-                    <p className="text-sm font-medium text-slate-700">{(rat.player as any)?.profile?.full_name || 'Jugador anónimo'}</p>
+                    <p className="text-sm font-medium text-slate-700">{(rat.rater as any)?.full_name || 'Líder de equipo'}</p>
                     <div className="flex">{stars(rat.score)}</div>
                   </div>
                   {rat.comment && <p className="text-xs text-slate-500">{rat.comment}</p>}
