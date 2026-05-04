@@ -26,6 +26,7 @@ const menuByRole: Record<string, { id: string; label: string; icon: any }[]> = {
     { id: 'matches', label: 'Partidos', icon: Calendar },
     { id: 'players', label: 'Jugadores', icon: Users },
     { id: 'referees', label: 'Árbitros', icon: Trophy },
+    { id: 'rankings', label: 'Rankings', icon: BarChart3 },
     { id: 'reports', label: 'Reportes', icon: FileText },
     { id: 'settings', label: 'Configuración', icon: Settings },
   ],
